@@ -343,16 +343,19 @@ def main(argv: list[str]) -> int:
 
     host_home = Path.home().resolve()
     auth_path = host_home / adapter.auth_dirname
-    if not auth_path.exists():
+    has_auth_dir = auth_path.exists()
+    has_env_auth = adapter.env_var in os.environ
+
+    if not has_auth_dir:
         eprint(
             f"warning: expected auth dir does not exist: {auth_path}\n"
             f"         {adapter.name} may require authentication inside the sandbox."
         )
 
-    if adapter.env_var not in os.environ:
+    if not has_env_auth and not has_auth_dir:
         eprint(
-            f"warning: {adapter.env_var} is not set in the host shell; "
-            f"auth relies on mounted credentials."
+            f"warning: neither {adapter.env_var} nor {auth_path} is available; "
+            f"{adapter.name} will likely require authentication inside the sandbox."
         )
 
     try:
