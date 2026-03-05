@@ -22,9 +22,9 @@ CACHE_DIR = ".agent-shell"
 @dataclass(frozen=True)
 class AgentAdapter:
     name: str
-    sandbox_agent: str
     auth_dirname: str
     env_var: str
+    cli_binary: str
 
     def required_packages(self, os_family: str) -> list[str]:
         raise NotImplementedError
@@ -71,9 +71,9 @@ class ClaudeAdapter(AgentAdapter):
 
 
 ADAPTERS: dict[str, AgentAdapter] = {
-    "codex": CodexAdapter("codex", "codex", ".codex", "OPENAI_API_KEY"),
-    "claude": ClaudeAdapter("claude", "claude", ".claude", "ANTHROPIC_API_KEY"),
-    "claude-code": ClaudeAdapter("claude", "claude", ".claude", "ANTHROPIC_API_KEY"),
+    "codex": CodexAdapter("codex", ".codex", "OPENAI_API_KEY", "codex"),
+    "claude": ClaudeAdapter("claude", ".claude", "ANTHROPIC_API_KEY", "claude"),
+    "claude-code": ClaudeAdapter("claude", ".claude", "ANTHROPIC_API_KEY", "claude"),
 }
 
 
@@ -83,10 +83,6 @@ def eprint(message: str) -> None:
 
 def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, check=check, text=True)
-
-
-def run_capture(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, check=True, text=True, capture_output=True)
 
 
 def normalize_agent(agent_name: str) -> AgentAdapter:
@@ -168,15 +164,6 @@ def user_setup_snippet(os_family: str) -> str:
     ).strip()
 
 
-def auth_link_snippet(adapter: AgentAdapter) -> str:
-    target = adapter.auth_target()
-    return textwrap.dedent(
-        f"""\
-        RUN mkdir -p /home/agent && rm -rf {target} && ln -s "${{HOST_HOME}}/{adapter.auth_dirname}" {target}
-        """
-    ).strip()
-
-
 def sudo_snippet() -> str:
     return textwrap.dedent(
         """\
@@ -196,8 +183,8 @@ def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-shell",
         description=(
-            "Build a local Docker Sandbox template for an agent and open a shell "
-            "in a fresh sandbox."
+            "Build a Docker image for an agent and open an interactive container "
+            "with your workspace mounted."
         ),
     )
     parser.add_argument(
@@ -232,11 +219,11 @@ def make_parser() -> argparse.ArgumentParser:
         "-m",
         "--mount",
         default=".",
-        help="Workspace directory to expose in sandbox (default: current directory).",
+        help="Workspace directory to mount to /workspace (default: current directory).",
     )
     parser.add_argument("--allow-sudo", action="store_true", help="Enable passwordless sudo for user agent.")
-    parser.add_argument("--name", help="Sandbox name (default: auto-generated).")
-    parser.add_argument("--rebuild", action="store_true", help="Rebuild template image even if cached.")
+    parser.add_argument("--name", help="Container name (default: auto-generated).")
+    parser.add_argument("--rebuild", action="store_true", help="Rebuild image even if cached.")
     return parser
 
 
@@ -270,21 +257,19 @@ def generate_dockerfile(
 
     install_packages = package_install_snippet(os_family, all_packages)
     user_setup = user_setup_snippet(os_family)
-    auth_link = auth_link_snippet(adapter)
 
     parts = [
         f"FROM {os_image}",
         "",
         "ARG AGENT_UID=1000",
         "ARG AGENT_GID=1000",
-        "ARG HOST_HOME=/tmp/host-home",
         "",
     ]
 
     if install_packages:
         parts.extend([install_packages, ""])
 
-    parts.extend([user_setup, "", adapter.install_snippet(), "", auth_link, ""])
+    parts.extend([user_setup, "", adapter.install_snippet(), ""])
 
     if allow_sudo:
         parts.extend([sudo_snippet(), ""])
@@ -299,18 +284,6 @@ def generate_dockerfile(
     )
 
     return "\n".join(parts).strip() + "\n"
-
-
-def ensure_docker_sandbox() -> None:
-    try:
-        output = run_capture(["docker", "sandbox", "version"])
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            "docker sandbox is not available. Ensure Docker Desktop Sandboxes are enabled."
-        ) from exc
-    merged = f"{output.stdout}\n{output.stderr}"
-    if "Server Version: Unavailable" in merged:
-        raise RuntimeError("docker sandbox server is unavailable.")
 
 
 def ensure_docker_engine() -> None:
@@ -338,7 +311,9 @@ def main(argv: list[str]) -> int:
             f"conflicting agent values: positional '{args.agent}' vs --agent '{args.agent_flag}'"
         )
     if not selected_agent:
-        parser.error("agent is required (use positional `agent-shell codex` or -a codex)")
+        parser.error(
+            "agent is required (use positional `agent-shell codex` or -a codex)"
+        )
 
     try:
         adapter = normalize_agent(selected_agent)
@@ -367,18 +342,17 @@ def main(argv: list[str]) -> int:
     if not has_auth_dir:
         eprint(
             f"warning: expected auth dir does not exist: {auth_path}\n"
-            f"         {adapter.name} may require authentication inside the sandbox."
+            f"         {adapter.name} may require authentication inside the container."
         )
 
     if not has_env_auth and not has_auth_dir:
         eprint(
             f"warning: neither {adapter.env_var} nor {auth_path} is available; "
-            f"{adapter.name} will likely require authentication inside the sandbox."
+            f"{adapter.name} will likely require authentication."
         )
 
     try:
         ensure_docker_engine()
-        ensure_docker_sandbox()
     except RuntimeError as err:
         parser.error(str(err))
 
@@ -389,7 +363,8 @@ def main(argv: list[str]) -> int:
             f"os_family={os_family}",
             f"sudo={int(args.allow_sudo)}",
             f"packages={' '.join(packages)}",
-            f"host_home={host_home}",
+            f"uid={os.getuid()}",
+            f"gid={os.getgid()}",
         ]
     )
     digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:12]
@@ -422,7 +397,7 @@ def main(argv: list[str]) -> int:
         build_needed = inspect.returncode != 0
 
     if build_needed:
-        print(f"Building template image {image_tag}")
+        print(f"Building image {image_tag}")
         build_cmd = [
             "docker",
             "build",
@@ -432,8 +407,6 @@ def main(argv: list[str]) -> int:
             f"AGENT_UID={os.getuid()}",
             "--build-arg",
             f"AGENT_GID={os.getgid()}",
-            "--build-arg",
-            f"HOST_HOME={host_home}",
             "-f",
             str(dockerfile_path),
             str(dockerfile_path.parent),
@@ -445,41 +418,45 @@ def main(argv: list[str]) -> int:
             eprint(f"error: docker build failed ({exc.returncode}): {cmd_text}")
             return exc.returncode or 1
     else:
-        print(f"Using cached template image {image_tag}")
+        print(f"Using cached image {image_tag}")
 
-    sandbox_name = args.name
-    if not sandbox_name:
+    container_name = args.name
+    if not container_name:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        sandbox_name = sanitize_name(f"agent-shell-{adapter.name}-{timestamp}")
+        container_name = sanitize_name(f"agent-shell-{adapter.name}-{timestamp}")
 
     run_cmd = [
         "docker",
-        "sandbox",
         "run",
+        "--rm",
+        "-it",
         "--name",
-        sandbox_name,
-        "--template",
-        image_tag,
-        "--pull-template",
-        "never",
-        adapter.sandbox_agent,
-        str(workspace),
+        container_name,
+        "-w",
+        "/workspace",
+        "-v",
+        f"{workspace}:/workspace",
     ]
 
-    if auth_path.exists():
-        run_cmd.append(str(auth_path))
+    if has_auth_dir:
+        run_cmd.extend(["-v", f"{auth_path}:{adapter.auth_target()}"])
 
+    if has_env_auth:
+        run_cmd.extend(["-e", f"{adapter.env_var}={os.environ[adapter.env_var]}"])
+
+    run_cmd.append(image_tag)
     if agent_args:
-        run_cmd.extend(["--", *agent_args])
+        run_cmd.extend([adapter.cli_binary, *agent_args])
+    else:
+        run_cmd.extend(["/bin/bash", "-l"])
 
     print(f"Generated Dockerfile: {dockerfile_path}")
-    print(f"Launching sandbox {sandbox_name}")
+    print(f"Launching container {container_name}")
     try:
         os.execvp(run_cmd[0], run_cmd)
     except OSError as exc:
-        eprint(f"error: failed to start docker sandbox run: {exc}")
+        eprint(f"error: failed to start docker run: {exc}")
         return 1
-    return 0
 
 
 if __name__ == "__main__":
