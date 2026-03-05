@@ -1,0 +1,465 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+import textwrap
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Iterable
+
+
+DEFAULT_OS_IMAGE = "ubuntu:24.04"
+CACHE_DIR = ".agent-shell"
+
+
+@dataclass(frozen=True)
+class AgentAdapter:
+    name: str
+    sandbox_agent: str
+    auth_dirname: str
+    env_var: str
+
+    def required_packages(self, os_family: str) -> list[str]:
+        raise NotImplementedError
+
+    def install_snippet(self) -> str:
+        raise NotImplementedError
+
+    def auth_target(self) -> str:
+        return f"/home/agent/{self.auth_dirname}"
+
+
+class CodexAdapter(AgentAdapter):
+    def required_packages(self, os_family: str) -> list[str]:
+        return ["ca-certificates", "curl", "tar", "gzip"]
+
+    def install_snippet(self) -> str:
+        return textwrap.dedent(
+            """\
+            ARG CODEX_VERSION=0.107.0
+            RUN set -eux; \\
+              arch="$(uname -m)"; \\
+              case "${arch}" in \\
+                x86_64) codex_target="x86_64-unknown-linux-musl" ;; \\
+                aarch64|arm64) codex_target="aarch64-unknown-linux-musl" ;; \\
+                *) echo "unsupported architecture for Codex install: ${arch}" >&2; exit 1 ;; \\
+              esac; \\
+              codex_url="https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-${codex_target}.tar.gz"; \\
+              tmpdir="$(mktemp -d)"; \\
+              curl -fsSL "${codex_url}" -o "${tmpdir}/codex.tgz"; \\
+              tar -xzf "${tmpdir}/codex.tgz" -C "${tmpdir}"; \\
+              cp "${tmpdir}/codex-${codex_target}" /usr/local/bin/codex; \\
+              chmod 0755 /usr/local/bin/codex; \\
+              rm -rf "${tmpdir}"
+            """
+        ).strip()
+
+
+class ClaudeAdapter(AgentAdapter):
+    def required_packages(self, os_family: str) -> list[str]:
+        return ["nodejs", "npm", "ca-certificates"]
+
+    def install_snippet(self) -> str:
+        return "RUN npm install -g @anthropic-ai/claude-code"
+
+
+ADAPTERS: dict[str, AgentAdapter] = {
+    "codex": CodexAdapter("codex", "codex", ".codex", "OPENAI_API_KEY"),
+    "claude": ClaudeAdapter("claude", "claude", ".claude", "ANTHROPIC_API_KEY"),
+    "claude-code": ClaudeAdapter("claude", "claude", ".claude", "ANTHROPIC_API_KEY"),
+}
+
+
+def eprint(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
+def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, check=check, text=True)
+
+
+def run_capture(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, check=True, text=True, capture_output=True)
+
+
+def normalize_agent(agent_name: str) -> AgentAdapter:
+    adapter = ADAPTERS.get(agent_name.lower())
+    if adapter is None:
+        valid = ", ".join(sorted({"codex", "claude"}))
+        raise ValueError(f"unsupported agent '{agent_name}' (supported: {valid})")
+    return adapter
+
+
+def infer_os_family(os_image: str) -> str:
+    name = os_image.split("@", 1)[0]
+    leaf = name.split("/")[-1]
+    repo = leaf.split(":", 1)[0].lower()
+
+    if repo in {"ubuntu", "debian", "kali", "linuxmint", "pop", "elementary"}:
+        return "debian"
+    if repo in {"alpine"}:
+        return "alpine"
+    if repo in {"fedora", "centos", "rockylinux", "almalinux", "oraclelinux", "rhel", "ubi"}:
+        return "redhat"
+    if repo in {"archlinux", "manjaro"}:
+        return "arch"
+    if repo in {"opensuse", "opensuse-leap", "opensuse-tumbleweed", "sles"}:
+        return "suse"
+    return "unknown"
+
+
+def package_install_snippet(os_family: str, packages: Iterable[str]) -> str:
+    package_list = [pkg for pkg in packages if pkg]
+    if not package_list:
+        return ""
+    quoted = " ".join(shlex.quote(pkg) for pkg in package_list)
+
+    snippets = {
+        "debian": f"RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends {quoted} && rm -rf /var/lib/apt/lists/*",
+        "alpine": f"RUN apk add --no-cache {quoted}",
+        "redhat": textwrap.dedent(
+            f"""\
+            RUN if command -v dnf >/dev/null 2>&1; then \\
+                  dnf install -y {quoted} && dnf clean all; \\
+                elif command -v yum >/dev/null 2>&1; then \\
+                  yum install -y {quoted} && yum clean all; \\
+                else \\
+                  echo "missing dnf/yum package manager" >&2; exit 1; \\
+                fi
+            """
+        ).strip(),
+        "arch": f"RUN pacman -Sy --noconfirm --needed {quoted} && pacman -Scc --noconfirm",
+        "suse": f"RUN zypper --non-interactive install --no-recommends {quoted} && zypper clean -a",
+    }
+    snippet = snippets.get(os_family)
+    if snippet is None:
+        raise ValueError(f"unsupported os family for package installation: {os_family}")
+    return snippet
+
+
+def user_setup_snippet(os_family: str) -> str:
+    if os_family == "alpine":
+        return textwrap.dedent(
+            """\
+            RUN set -eux; \\
+              addgroup -S -g "${AGENT_GID}" agent 2>/dev/null || true; \\
+              adduser -S -D -h /home/agent -u "${AGENT_UID}" -G agent agent 2>/dev/null || true; \\
+              mkdir -p /home/agent /workspace; \\
+              chown -R "${AGENT_UID}:${AGENT_GID}" /home/agent /workspace
+            """
+        ).strip()
+    return textwrap.dedent(
+        """\
+        RUN set -eux; \\
+          if ! id -u agent >/dev/null 2>&1; then \\
+            groupadd --gid "${AGENT_GID}" agent 2>/dev/null || true; \\
+            useradd --uid "${AGENT_UID}" --gid "${AGENT_GID}" -m -s /bin/bash agent 2>/dev/null || true; \\
+          fi; \\
+          mkdir -p /home/agent /workspace; \\
+          chown -R "${AGENT_UID}:${AGENT_GID}" /home/agent /workspace
+        """
+    ).strip()
+
+
+def auth_link_snippet(adapter: AgentAdapter) -> str:
+    target = adapter.auth_target()
+    return textwrap.dedent(
+        f"""\
+        RUN mkdir -p /home/agent && rm -rf {target} && ln -s "${{HOST_HOME}}/{adapter.auth_dirname}" {target}
+        """
+    ).strip()
+
+
+def sudo_snippet() -> str:
+    return textwrap.dedent(
+        """\
+        RUN mkdir -p /etc/sudoers.d \
+          && echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent \
+          && chmod 0440 /etc/sudoers.d/agent
+        """
+    ).strip()
+
+
+def sanitize_name(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_.+-]+", "-", value).strip("-")
+    return sanitized or "agent-shell"
+
+
+def make_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="agent-shell",
+        description=(
+            "Build a local Docker Sandbox template for an agent and open a shell "
+            "in a fresh sandbox."
+        ),
+    )
+    parser.add_argument("-a", "--agent", required=True, help="Agent to run: codex | claude")
+    parser.add_argument(
+        "-o",
+        "-os",
+        "--os",
+        dest="os_image",
+        default=DEFAULT_OS_IMAGE,
+        help=f"Base OS image (default: {DEFAULT_OS_IMAGE})",
+    )
+    parser.add_argument(
+        "-p",
+        "--package",
+        dest="packages",
+        nargs="+",
+        action="append",
+        default=[],
+        help="One or more OS packages to install (repeatable).",
+    )
+    parser.add_argument(
+        "-m",
+        "--mount",
+        default=".",
+        help="Workspace directory to expose in sandbox (default: current directory).",
+    )
+    parser.add_argument("--allow-sudo", action="store_true", help="Enable passwordless sudo for user agent.")
+    parser.add_argument("--name", help="Sandbox name (default: auto-generated).")
+    parser.add_argument("--rebuild", action="store_true", help="Rebuild template image even if cached.")
+    return parser
+
+
+def split_agent_args(argv: list[str]) -> tuple[list[str], list[str]]:
+    if "--" not in argv:
+        return argv, []
+    idx = argv.index("--")
+    return argv[:idx], argv[idx + 1 :]
+
+
+def generate_dockerfile(
+    os_image: str,
+    os_family: str,
+    adapter: AgentAdapter,
+    packages: list[str],
+    allow_sudo: bool,
+) -> str:
+    base_packages = ["bash", "curl", "git", "ca-certificates"]
+    if os_family != "alpine":
+        base_packages.append("procps")
+
+    all_packages: list[str] = []
+    seen: set[str] = set()
+    for pkg in [*base_packages, *adapter.required_packages(os_family), *packages]:
+        if pkg not in seen:
+            seen.add(pkg)
+            all_packages.append(pkg)
+
+    if allow_sudo and "sudo" not in seen:
+        all_packages.append("sudo")
+
+    install_packages = package_install_snippet(os_family, all_packages)
+    user_setup = user_setup_snippet(os_family)
+    auth_link = auth_link_snippet(adapter)
+
+    parts = [
+        f"FROM {os_image}",
+        "",
+        "ARG AGENT_UID=1000",
+        "ARG AGENT_GID=1000",
+        "ARG HOST_HOME=/tmp/host-home",
+        "",
+    ]
+
+    if install_packages:
+        parts.extend([install_packages, ""])
+
+    parts.extend([user_setup, "", adapter.install_snippet(), "", auth_link, ""])
+
+    if allow_sudo:
+        parts.extend([sudo_snippet(), ""])
+
+    parts.extend(
+        [
+            "ENV HOME=/home/agent",
+            "WORKDIR /workspace",
+            "USER agent",
+            "",
+        ]
+    )
+
+    return "\n".join(parts).strip() + "\n"
+
+
+def ensure_docker_sandbox() -> None:
+    try:
+        output = run_capture(["docker", "sandbox", "version"])
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "docker sandbox is not available. Ensure Docker Desktop Sandboxes are enabled."
+        ) from exc
+    merged = f"{output.stdout}\n{output.stderr}"
+    if "Server Version: Unavailable" in merged:
+        raise RuntimeError("docker sandbox server is unavailable.")
+
+
+def ensure_docker_engine() -> None:
+    check = subprocess.run(
+        ["docker", "info"],
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    if check.returncode != 0:
+        message = (check.stderr or "").strip()
+        raise RuntimeError(
+            f"docker engine is not accessible ({message or 'unknown docker error'})."
+        )
+
+
+def main(argv: list[str]) -> int:
+    cli_args, agent_args = split_agent_args(argv)
+    parser = make_parser()
+    args = parser.parse_args(cli_args)
+
+    try:
+        adapter = normalize_agent(args.agent)
+    except ValueError as err:
+        parser.error(str(err))
+
+    workspace = Path(args.mount).expanduser().resolve()
+    if not workspace.is_dir():
+        parser.error(f"mount path does not exist or is not a directory: {workspace}")
+
+    os_family = infer_os_family(args.os_image)
+    if os_family == "unknown":
+        parser.error(
+            "unable to infer package manager for --os image. Supported families: "
+            "debian/ubuntu, alpine, fedora/rhel, arch, opensuse."
+        )
+
+    package_groups = args.packages if args.packages else []
+    packages = [pkg for group in package_groups for pkg in group]
+
+    host_home = Path.home().resolve()
+    auth_path = host_home / adapter.auth_dirname
+    if not auth_path.exists():
+        eprint(
+            f"warning: expected auth dir does not exist: {auth_path}\n"
+            f"         {adapter.name} may require authentication inside the sandbox."
+        )
+
+    if adapter.env_var not in os.environ:
+        eprint(
+            f"warning: {adapter.env_var} is not set in the host shell; "
+            f"auth relies on mounted credentials."
+        )
+
+    try:
+        ensure_docker_engine()
+        ensure_docker_sandbox()
+    except RuntimeError as err:
+        parser.error(str(err))
+
+    cache_key = "|".join(
+        [
+            f"agent={adapter.name}",
+            f"os={args.os_image}",
+            f"os_family={os_family}",
+            f"sudo={int(args.allow_sudo)}",
+            f"packages={' '.join(packages)}",
+            f"host_home={host_home}",
+        ]
+    )
+    digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:12]
+
+    repo_root = Path(__file__).resolve().parents[1]
+    cache_root = repo_root / CACHE_DIR
+    dockerfile_dir = cache_root / "dockerfiles"
+    dockerfile_dir.mkdir(parents=True, exist_ok=True)
+    dockerfile_path = dockerfile_dir / f"{adapter.name}-{digest}.Dockerfile"
+
+    dockerfile_content = generate_dockerfile(
+        os_image=args.os_image,
+        os_family=os_family,
+        adapter=adapter,
+        packages=packages,
+        allow_sudo=args.allow_sudo,
+    )
+    dockerfile_path.write_text(dockerfile_content, encoding="utf-8")
+
+    image_tag = f"agent-shell/{adapter.name}:{digest}"
+    if args.rebuild:
+        build_needed = True
+    else:
+        inspect = subprocess.run(
+            ["docker", "image", "inspect", image_tag],
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        build_needed = inspect.returncode != 0
+
+    if build_needed:
+        print(f"Building template image {image_tag}")
+        build_cmd = [
+            "docker",
+            "build",
+            "-t",
+            image_tag,
+            "--build-arg",
+            f"AGENT_UID={os.getuid()}",
+            "--build-arg",
+            f"AGENT_GID={os.getgid()}",
+            "--build-arg",
+            f"HOST_HOME={host_home}",
+            "-f",
+            str(dockerfile_path),
+            str(dockerfile_path.parent),
+        ]
+        try:
+            run(build_cmd)
+        except subprocess.CalledProcessError as exc:
+            cmd_text = " ".join(shlex.quote(part) for part in build_cmd)
+            eprint(f"error: docker build failed ({exc.returncode}): {cmd_text}")
+            return exc.returncode or 1
+    else:
+        print(f"Using cached template image {image_tag}")
+
+    sandbox_name = args.name
+    if not sandbox_name:
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        sandbox_name = sanitize_name(f"agent-shell-{adapter.name}-{timestamp}")
+
+    run_cmd = [
+        "docker",
+        "sandbox",
+        "run",
+        "--name",
+        sandbox_name,
+        "--template",
+        image_tag,
+        "--pull-template",
+        "never",
+        adapter.sandbox_agent,
+        str(workspace),
+    ]
+
+    if auth_path.exists():
+        run_cmd.append(str(auth_path))
+
+    if agent_args:
+        run_cmd.extend(["--", *agent_args])
+
+    print(f"Generated Dockerfile: {dockerfile_path}")
+    print(f"Launching sandbox {sandbox_name}")
+    try:
+        os.execvp(run_cmd[0], run_cmd)
+    except OSError as exc:
+        eprint(f"error: failed to start docker sandbox run: {exc}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

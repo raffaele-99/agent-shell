@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import sys
+
+
+def main() -> None:
+    repo_root = Path(__file__).resolve().parent
+    script = repo_root / "scripts" / "agent-shell"
+    os.execv(str(script), [str(script), *sys.argv[1:]])
+
+
+if __name__ == "__main__":
+    main()
