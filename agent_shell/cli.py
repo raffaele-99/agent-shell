@@ -218,6 +218,7 @@ def load_config(path: Path) -> dict[str, object]:
     config: dict[str, object] = {
         "default_agent": None,
         "default_allow_sudo": DEFAULT_ALLOW_SUDO,
+        "default_network": "none",
     }
     if not path.exists():
         return config
@@ -247,6 +248,9 @@ def load_config(path: Path) -> dict[str, object]:
                 eprint(f"warning: ignoring invalid default_allow_sudo in {path}: {raw}")
             else:
                 config["default_allow_sudo"] = parsed
+        elif key == "default_network":
+            if raw:
+                config["default_network"] = raw.lower()
 
     return config
 
@@ -256,11 +260,13 @@ def write_config(path: Path, config: dict[str, object]) -> None:
     default_agent = config.get("default_agent")
     agent_value = "null" if default_agent is None else str(default_agent)
     allow_sudo = bool(config.get("default_allow_sudo", False))
+    network = config.get("default_network", "none")
     rendered = "\n".join(
         [
             "# agent-shell defaults",
             f"default_agent: {agent_value}",
             f"default_allow_sudo: {'true' if allow_sudo else 'false'}",
+            f"default_network: {network}",
             "",
         ]
     )
@@ -306,6 +312,19 @@ def run_config_wizard(path: Path, existing_config: dict[str, object]) -> int:
                 continue
             selected_sudo = parsed
             break
+        current_network = str(existing_config.get("default_network", "none"))
+        while True:
+            user_value = input(
+                f"Default network mode [none/bridge/host] ({current_network}): "
+            ).strip().lower()
+            if not user_value:
+                selected_network = current_network
+                break
+            if user_value in {"none", "bridge", "host"}:
+                selected_network = user_value
+                break
+            print("Invalid value. Enter none, bridge, or host.")
+
     except (EOFError, KeyboardInterrupt):
         print("\nCancelled.")
         return 1
@@ -313,6 +332,7 @@ def run_config_wizard(path: Path, existing_config: dict[str, object]) -> int:
     new_config = {
         "default_agent": selected_agent,
         "default_allow_sudo": selected_sudo,
+        "default_network": selected_network,
     }
     write_config(path, new_config)
     print("Saved.")
@@ -697,7 +717,7 @@ def main(argv: list[str]) -> int:
         "--pids-limit=512",
         "--memory=4g",
         "--cpus=2",
-        f"--network={args.network or 'none'}",
+        f"--network={args.network or config.get('default_network', 'none')}",
         "-v",
         f"{workspace}:/workspace{':ro' if args.read_only_workspace else ''}",
     ]
@@ -729,7 +749,7 @@ def main(argv: list[str]) -> int:
         print(" ".join(shlex.quote(p) for p in safe_cmd))
         return 0
 
-    network_mode = args.network or "none"
+    network_mode = args.network or config.get("default_network", "none")
     print(f"Generated Dockerfile: {dockerfile_path}")
     print(f"Launching container {container_name}")
     print(f"  Sandbox: cap_drop=ALL, no-new-privileges, pids_limit=512, memory=4g, cpus=2")
