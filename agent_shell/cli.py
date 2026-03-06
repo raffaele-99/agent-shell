@@ -34,6 +34,9 @@ class AgentAdapter:
     def install_snippet(self) -> str:
         raise NotImplementedError
 
+    def auto_args(self) -> list[str]:
+        raise NotImplementedError
+
     def auth_target(self) -> str:
         return f"/home/agent/{self.auth_dirname}"
 
@@ -41,6 +44,9 @@ class AgentAdapter:
 class CodexAdapter(AgentAdapter):
     def required_packages(self, os_family: str) -> list[str]:
         return ["ca-certificates", "curl", "tar", "gzip"]
+
+    def auto_args(self) -> list[str]:
+        return ["--full-auto"]
 
     def install_snippet(self) -> str:
         return textwrap.dedent(
@@ -67,6 +73,9 @@ class CodexAdapter(AgentAdapter):
 class ClaudeAdapter(AgentAdapter):
     def required_packages(self, os_family: str) -> list[str]:
         return ["nodejs", "npm", "ca-certificates"]
+
+    def auto_args(self) -> list[str]:
+        return ["--dangerously-skip-permissions"]
 
     def install_snippet(self) -> str:
         return "RUN npm install -g @anthropic-ai/claude-code"
@@ -391,6 +400,11 @@ def make_parser() -> argparse.ArgumentParser:
         help="Allow network access (shorthand for --network bridge).",
     )
     parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="Launch the agent in fully autonomous mode instead of opening a shell.",
+    )
+    parser.add_argument(
         "--config",
         action="store_true",
         help="Open interactive configuration for defaults at ~/.config/agent-shell/config.yml.",
@@ -635,6 +649,8 @@ def main(argv: list[str]) -> int:
     run_cmd.append(image_tag)
     if agent_args:
         run_cmd.extend([adapter.cli_binary, *agent_args])
+    elif args.auto:
+        run_cmd.extend([adapter.cli_binary, *adapter.auto_args()])
     else:
         run_cmd.extend(["/bin/bash", "-l"])
 
