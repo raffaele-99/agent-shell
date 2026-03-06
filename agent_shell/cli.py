@@ -405,6 +405,11 @@ def make_parser() -> argparse.ArgumentParser:
         help="Launch the agent in fully autonomous mode instead of opening a shell.",
     )
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the generated Dockerfile and docker run command without executing.",
+    )
+    parser.add_argument(
         "--config",
         action="store_true",
         help="Open interactive configuration for defaults at ~/.config/agent-shell/config.yml.",
@@ -653,6 +658,19 @@ def main(argv: list[str]) -> int:
         run_cmd.extend([adapter.cli_binary, *adapter.auto_args()])
     else:
         run_cmd.extend(["/bin/bash", "-l"])
+
+    if args.dry_run:
+        print(f"# Dockerfile: {dockerfile_path}")
+        print(dockerfile_content)
+        print(f"# Run command:")
+        safe_cmd = []
+        for part in run_cmd:
+            if part.startswith(f"{adapter.env_var}="):
+                safe_cmd.append(f"{adapter.env_var}=***")
+            else:
+                safe_cmd.append(part)
+        print(" ".join(shlex.quote(p) for p in safe_cmd))
+        return 0
 
     print(f"Generated Dockerfile: {dockerfile_path}")
     print(f"Launching container {container_name}")
