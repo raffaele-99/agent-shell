@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Ephemeral Docker agent shell with dynamic OS/package setup."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["typer>=0.12.0"]
 
 [project.scripts]
 agent-shell = "agent_shell.cli:entrypoint"
