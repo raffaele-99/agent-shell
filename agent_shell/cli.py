@@ -219,6 +219,7 @@ def load_config(path: Path) -> dict[str, object]:
         "default_agent": None,
         "default_allow_sudo": DEFAULT_ALLOW_SUDO,
         "default_network": "none",
+        "default_auto": False,
     }
     if not path.exists():
         return config
@@ -251,6 +252,12 @@ def load_config(path: Path) -> dict[str, object]:
         elif key == "default_network":
             if raw:
                 config["default_network"] = raw.lower()
+        elif key == "default_auto":
+            parsed = parse_bool(raw)
+            if parsed is None:
+                eprint(f"warning: ignoring invalid default_auto in {path}: {raw}")
+            else:
+                config["default_auto"] = parsed
 
     return config
 
@@ -261,12 +268,14 @@ def write_config(path: Path, config: dict[str, object]) -> None:
     agent_value = "null" if default_agent is None else str(default_agent)
     allow_sudo = bool(config.get("default_allow_sudo", False))
     network = config.get("default_network", "none")
+    auto = bool(config.get("default_auto", False))
     rendered = "\n".join(
         [
             "# agent-shell defaults",
             f"default_agent: {agent_value}",
             f"default_allow_sudo: {'true' if allow_sudo else 'false'}",
             f"default_network: {network}",
+            f"default_auto: {'true' if auto else 'false'}",
             "",
         ]
     )
@@ -325,6 +334,22 @@ def run_config_wizard(path: Path, existing_config: dict[str, object]) -> int:
                 break
             print("Invalid value. Enter none, bridge, or host.")
 
+        current_auto = bool(existing_config.get("default_auto", False))
+        current_auto_label = "y" if current_auto else "n"
+        while True:
+            user_value = input(
+                f"Default auto mode [y/n] ({current_auto_label}): "
+            ).strip()
+            if not user_value:
+                selected_auto = current_auto
+                break
+            parsed = parse_bool(user_value)
+            if parsed is None:
+                print("Invalid value. Enter y or n.")
+                continue
+            selected_auto = parsed
+            break
+
     except (EOFError, KeyboardInterrupt):
         print("\nCancelled.")
         return 1
@@ -333,6 +358,7 @@ def run_config_wizard(path: Path, existing_config: dict[str, object]) -> int:
         "default_agent": selected_agent,
         "default_allow_sudo": selected_sudo,
         "default_network": selected_network,
+        "default_auto": selected_auto,
     }
     write_config(path, new_config)
     print("Saved.")
@@ -731,7 +757,7 @@ def main(argv: list[str]) -> int:
     run_cmd.append(image_tag)
     if agent_args:
         run_cmd.extend([adapter.cli_binary, *agent_args])
-    elif args.auto:
+    elif args.auto or config.get("default_auto", False):
         run_cmd.extend([adapter.cli_binary, *adapter.auto_args()])
     else:
         run_cmd.extend(["/bin/bash", "-l"])
