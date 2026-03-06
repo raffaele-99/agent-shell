@@ -369,6 +369,11 @@ def make_parser() -> argparse.ArgumentParser:
         default=".",
         help="Workspace directory to mount to /workspace (default: current directory).",
     )
+    parser.add_argument(
+        "--read-only-workspace",
+        action="store_true",
+        help="Mount the workspace as read-only.",
+    )
     sudo_group = parser.add_mutually_exclusive_group()
     sudo_group.add_argument(
         "--allow-sudo",
@@ -644,7 +649,7 @@ def main(argv: list[str]) -> int:
         "--cpus=2",
         f"--network={args.network or 'none'}",
         "-v",
-        f"{workspace}:/workspace",
+        f"{workspace}:/workspace{':ro' if args.read_only_workspace else ''}",
     ]
 
     if has_auth_dir:
@@ -679,7 +684,8 @@ def main(argv: list[str]) -> int:
     print(f"Launching container {container_name}")
     print(f"  Sandbox: cap_drop=ALL, no-new-privileges, pids_limit=512, memory=4g, cpus=2")
     print(f"  Network: {network_mode}")
-    print(f"  Workspace: {workspace} -> /workspace (read-write)")
+    ws_mode = "read-only" if args.read_only_workspace else "read-write"
+    print(f"  Workspace: {workspace} -> /workspace ({ws_mode})")
     print(f"  Sudo: {'enabled' if resolved_allow_sudo else 'disabled'}")
     try:
         os.execvp(run_cmd[0], run_cmd)
