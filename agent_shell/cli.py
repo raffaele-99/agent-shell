@@ -674,8 +674,13 @@ def main(argv: list[str]) -> int:
         print(" ".join(shlex.quote(p) for p in safe_cmd))
         return 0
 
+    network_mode = args.network or "none"
     print(f"Generated Dockerfile: {dockerfile_path}")
     print(f"Launching container {container_name}")
+    print(f"  Sandbox: cap_drop=ALL, no-new-privileges, pids_limit=512, memory=4g, cpus=2")
+    print(f"  Network: {network_mode}")
+    print(f"  Workspace: {workspace} -> /workspace (read-write)")
+    print(f"  Sudo: {'enabled' if resolved_allow_sudo else 'disabled'}")
     try:
         os.execvp(run_cmd[0], run_cmd)
     except OSError as exc:
