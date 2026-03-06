@@ -376,6 +376,20 @@ def make_parser() -> argparse.ArgumentParser:
     parser.set_defaults(allow_sudo=None)
     parser.add_argument("--name", help="Container name (default: auto-generated).")
     parser.add_argument("--rebuild", action="store_true", help="Rebuild image even if cached.")
+    net_group = parser.add_mutually_exclusive_group()
+    net_group.add_argument(
+        "--network",
+        dest="network",
+        default=None,
+        help="Docker network mode (e.g. none, bridge, host). Default: none.",
+    )
+    net_group.add_argument(
+        "--allow-network",
+        dest="network",
+        action="store_const",
+        const="bridge",
+        help="Allow network access (shorthand for --network bridge).",
+    )
     parser.add_argument(
         "--config",
         action="store_true",
@@ -607,6 +621,7 @@ def main(argv: list[str]) -> int:
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges:true",
         "--pids-limit=512",
+        f"--network={args.network or 'none'}",
         "-v",
         f"{workspace}:/workspace",
     ]
