@@ -419,6 +419,11 @@ def make_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Open interactive configuration for defaults at ~/.config/agent-shell/config.yml.",
     )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="Remove cached Dockerfiles and agent-shell Docker images, then exit.",
+    )
     return parser
 
 
@@ -497,6 +502,31 @@ def ensure_docker_engine() -> None:
         )
 
 
+def run_prune() -> int:
+    cache_root = cache_root_path()
+    dockerfile_dir = cache_root / "dockerfiles"
+    removed_files = 0
+    if dockerfile_dir.is_dir():
+        for f in dockerfile_dir.iterdir():
+            if f.suffix == ".Dockerfile":
+                f.unlink()
+                removed_files += 1
+    print(f"Removed {removed_files} cached Dockerfile(s).")
+
+    result = subprocess.run(
+        ["docker", "images", "--filter=reference=agent-shell/*", "--format", "{{.Repository}}:{{.Tag}}"],
+        text=True,
+        capture_output=True,
+    )
+    images = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if images:
+        subprocess.run(["docker", "rmi", *images], text=True)
+        print(f"Removed {len(images)} Docker image(s).")
+    else:
+        print("No agent-shell Docker images found.")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     cli_args, agent_args = split_agent_args(argv)
     parser = make_parser()
@@ -506,6 +536,9 @@ def main(argv: list[str]) -> int:
     config = load_config(config_path)
     if args.config:
         return run_config_wizard(config_path, config)
+
+    if args.prune:
+        return run_prune()
 
     selected_agent = args.agent_flag or args.agent or config.get("default_agent")
     if args.agent and args.agent_flag and args.agent != args.agent_flag:
