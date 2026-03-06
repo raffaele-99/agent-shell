@@ -31,19 +31,19 @@ uv tool upgrade --from . agent-shell
 ### Usage
 ```bash
 # Interactive shell
-./agent-shell codex -os ubuntu:24.04 -p ghidra radare2 -m . --allow-sudo
-./agent-shell claude -os alpine:3.20 -p gdb strace -m .
+agent-shell codex -o ubuntu:24.04 -p ghidra -p radare2 -m . --allow-sudo
+agent-shell claude -o alpine:3.20 -p gdb -p strace -m .
 
 # Fully autonomous mode (no shell, agent runs directly)
-./agent-shell codex -m . --auto --allow-network
-./agent-shell claude -m . --auto
+agent-shell codex -m . --auto --allow-network
+agent-shell claude -m . --auto
 
 # Preview without executing
-./agent-shell codex -m . --dry-run
+agent-shell codex -m . --dry-run
 
 # Configuration and maintenance
-./agent-shell --config
-./agent-shell --prune
+agent-shell --config
+agent-shell --prune
 ```
 
 ### What it does
@@ -85,7 +85,7 @@ Supported keys:
   - Fedora/RHEL family (`dnf`/`yum`)
   - Arch (`pacman`)
   - openSUSE/SLES (`zypper`)
-- `-p/--package` values are passed directly to the selected package manager, so package names may differ across OS families.
+- `-p/--package` values are passed directly to the selected package manager; repeat the flag for each package (`-p pkg1 -p pkg2`). Package names may differ across OS families.
 - `--auto` launches the agent in autonomous mode (Codex: `--full-auto`, Claude: `--dangerously-skip-permissions`).
 - `--allow-network` enables network access; `--network <mode>` for explicit control.
 - `--read-only-workspace` mounts the workspace as read-only.
