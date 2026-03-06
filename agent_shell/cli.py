@@ -640,6 +640,8 @@ def main(argv: list[str]) -> int:
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges:true",
         "--pids-limit=512",
+        "--memory=4g",
+        "--cpus=2",
         f"--network={args.network or 'none'}",
         "-v",
         f"{workspace}:/workspace",
