@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
 import hashlib
 import os
 from pathlib import Path
@@ -12,7 +11,9 @@ import sys
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable
+from typing import Annotated, Iterable, Optional
+
+import typer
 
 
 DEFAULT_OS_IMAGE = "ubuntu:24.04"
@@ -291,7 +292,7 @@ def write_config(path: Path, config: dict[str, object]) -> None:
     path.write_text(rendered, encoding="utf-8")
 
 
-def run_config_wizard(path: Path, existing_config: dict[str, object]) -> int:
+def run_config_wizard(path: Path, existing_config: dict[str, object]) -> None:
     print(f"Config path: {path}")
     print("Press Enter to keep the current value.")
 
@@ -377,7 +378,7 @@ def run_config_wizard(path: Path, existing_config: dict[str, object]) -> int:
 
     except (EOFError, KeyboardInterrupt):
         print("\nCancelled.")
-        return 1
+        raise typer.Exit(1)
 
     new_config = {
         "default_agent": selected_agent,
@@ -388,7 +389,6 @@ def run_config_wizard(path: Path, existing_config: dict[str, object]) -> int:
     }
     write_config(path, new_config)
     print("Saved.")
-    return 0
 
 
 def prompt_snippet() -> str:
@@ -401,118 +401,6 @@ def prompt_snippet() -> str:
         } > /etc/profile.d/agent-shell-prompt.sh
         """
     ).strip()
-
-
-def make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="agent-shell",
-        description=(
-            "Build a Docker image for an agent and open an interactive container "
-            "with your workspace mounted."
-        ),
-    )
-    parser.add_argument(
-        "agent",
-        nargs="?",
-        help="Agent to run positionally: codex | claude",
-    )
-    parser.add_argument(
-        "-a",
-        "--agent",
-        dest="agent_flag",
-        help="Agent to run (optional if provided positionally).",
-    )
-    parser.add_argument(
-        "-o",
-        "-os",
-        "--os",
-        dest="os_image",
-        default=DEFAULT_OS_IMAGE,
-        help=f"Base OS image (default: {DEFAULT_OS_IMAGE})",
-    )
-    parser.add_argument(
-        "-p",
-        "--package",
-        dest="packages",
-        nargs="+",
-        action="append",
-        default=[],
-        help="One or more OS packages to install (repeatable).",
-    )
-    parser.add_argument(
-        "-m",
-        "--mount",
-        default=".",
-        help="Workspace directory to mount to /workspace (default: current directory).",
-    )
-    parser.add_argument(
-        "--read-only-workspace",
-        action="store_true",
-        help="Mount the workspace as read-only.",
-    )
-    sudo_group = parser.add_mutually_exclusive_group()
-    sudo_group.add_argument(
-        "--allow-sudo",
-        dest="allow_sudo",
-        action="store_true",
-        help="Enable passwordless sudo for user agent.",
-    )
-    sudo_group.add_argument(
-        "--no-allow-sudo",
-        dest="allow_sudo",
-        action="store_false",
-        help="Disable sudo even if config default enables it.",
-    )
-    parser.set_defaults(allow_sudo=None)
-    parser.add_argument("--name", help="Container name (default: auto-generated).")
-    parser.add_argument("--rebuild", action="store_true", help="Rebuild image even if cached.")
-    parser.add_argument(
-        "--agent-version",
-        default=None,
-        help="Override the agent CLI version to install (e.g. 0.107.0 for Codex).",
-    )
-    net_group = parser.add_mutually_exclusive_group()
-    net_group.add_argument(
-        "--network",
-        dest="network",
-        default=None,
-        help="Docker network mode (e.g. none, bridge, host). Default: none.",
-    )
-    net_group.add_argument(
-        "--allow-network",
-        dest="network",
-        action="store_const",
-        const="bridge",
-        help="Allow network access (shorthand for --network bridge).",
-    )
-    parser.add_argument(
-        "--auto",
-        action="store_true",
-        help="Launch the agent in fully autonomous mode instead of opening a shell.",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print the generated Dockerfile and docker run command without executing.",
-    )
-    parser.add_argument(
-        "--config",
-        action="store_true",
-        help="Open interactive configuration for defaults at ~/.config/agent-shell/config.yml.",
-    )
-    parser.add_argument(
-        "--prune",
-        action="store_true",
-        help="Remove cached Dockerfiles and agent-shell Docker images, then exit.",
-    )
-    return parser
-
-
-def split_agent_args(argv: list[str]) -> tuple[list[str], list[str]]:
-    if "--" not in argv:
-        return argv, []
-    idx = argv.index("--")
-    return argv[:idx], argv[idx + 1 :]
 
 
 def generate_dockerfile(
@@ -579,12 +467,14 @@ def ensure_docker_engine() -> None:
     )
     if check.returncode != 0:
         message = (check.stderr or "").strip()
-        raise RuntimeError(
-            f"docker engine is not accessible ({message or 'unknown docker error'})."
+        eprint(
+            f"error: docker engine is not accessible "
+            f"({message or 'unknown docker error'})."
         )
+        raise typer.Exit(1)
 
 
-def run_prune() -> int:
+def do_prune() -> None:
     cache_root = cache_root_path()
     dockerfile_dir = cache_root / "dockerfiles"
     removed_files = 0
@@ -606,57 +496,157 @@ def run_prune() -> int:
         print(f"Removed {len(images)} Docker image(s).")
     else:
         print("No agent-shell Docker images found.")
-    return 0
 
 
-def main(argv: list[str]) -> int:
-    cli_args, agent_args = split_agent_args(argv)
-    parser = make_parser()
-    args = parser.parse_args(cli_args)
+# -- Typer app ---------------------------------------------------------------
 
+app = typer.Typer(
+    name="agent-shell",
+    help=(
+        "Build a Docker image for an agent and open an interactive "
+        "container with your workspace mounted."
+    ),
+    add_completion=False,
+    rich_markup_mode="rich",
+)
+
+# Store passthrough args (everything after --) since typer/click can't
+# natively forward them.
+_agent_passthrough_args: list[str] = []
+
+
+@app.command()
+def main(
+    # -- agent selection --
+    agent: Annotated[
+        Optional[str],
+        typer.Argument(help="Agent to run: [bold]codex[/bold] | [bold]claude[/bold]."),
+    ] = None,
+    agent_flag: Annotated[
+        Optional[str],
+        typer.Option("--agent", "-a", help="Agent to run (alternative to positional)."),
+    ] = None,
+    # -- image & packages --
+    os_image: Annotated[
+        str,
+        typer.Option("--os", "-o", help="Base OS image."),
+    ] = DEFAULT_OS_IMAGE,
+    packages: Annotated[
+        Optional[list[str]],
+        typer.Option("--package", "-p", help="OS package to install (repeatable)."),
+    ] = None,
+    agent_version: Annotated[
+        Optional[str],
+        typer.Option("--agent-version", help="Override the agent CLI version to install."),
+    ] = None,
+    # -- workspace --
+    mount: Annotated[
+        str,
+        typer.Option("--mount", "-m", help="Workspace directory to mount to /workspace."),
+    ] = ".",
+    read_only_workspace: Annotated[
+        bool,
+        typer.Option("--read-only-workspace", help="Mount the workspace as read-only."),
+    ] = False,
+    # -- container security --
+    allow_sudo: Annotated[
+        Optional[bool],
+        typer.Option("--allow-sudo/--no-allow-sudo", help="Enable/disable passwordless sudo."),
+    ] = None,
+    network: Annotated[
+        Optional[str],
+        typer.Option("--network", help="Docker network mode (none, bridge, host)."),
+    ] = None,
+    allow_network: Annotated[
+        bool,
+        typer.Option("--allow-network", help="Allow network access (shorthand for --network bridge)."),
+    ] = False,
+    # -- run mode --
+    auto: Annotated[
+        bool,
+        typer.Option("--auto", help="Launch the agent in fully autonomous mode."),
+    ] = False,
+    name: Annotated[
+        Optional[str],
+        typer.Option("--name", help="Container name (auto-generated if omitted)."),
+    ] = None,
+    rebuild: Annotated[
+        bool,
+        typer.Option("--rebuild", help="Rebuild image even if cached."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print Dockerfile and docker run command without executing."),
+    ] = False,
+    # -- management --
+    config: Annotated[
+        bool,
+        typer.Option("--config", help="Open interactive configuration wizard."),
+    ] = False,
+    prune: Annotated[
+        bool,
+        typer.Option("--prune", help="Remove cached Dockerfiles and agent-shell Docker images."),
+    ] = False,
+) -> None:
     config_path = config_file_path()
-    config = load_config(config_path)
-    if args.config:
-        return run_config_wizard(config_path, config)
+    cfg = load_config(config_path)
 
-    if args.prune:
-        return run_prune()
+    if config:
+        run_config_wizard(config_path, cfg)
+        return
 
-    selected_agent = args.agent_flag or args.agent or config.get("default_agent")
-    if args.agent and args.agent_flag and args.agent != args.agent_flag:
-        parser.error(
-            f"conflicting agent values: positional '{args.agent}' vs --agent '{args.agent_flag}'"
+    if prune:
+        do_prune()
+        return
+
+    # -- validate network flags --
+    if network and allow_network:
+        eprint("error: --network and --allow-network are mutually exclusive.")
+        raise typer.Exit(1)
+    if allow_network:
+        network = "bridge"
+
+    # -- resolve agent --
+    selected_agent = agent_flag or agent or cfg.get("default_agent")
+    if agent and agent_flag and agent != agent_flag:
+        eprint(
+            f"error: conflicting agent values: "
+            f"positional '{agent}' vs --agent '{agent_flag}'"
         )
+        raise typer.Exit(1)
     if not selected_agent:
-        parser.error(
-            "agent is required (use positional `agent-shell codex`, -a codex, "
-            "or set default_agent in ~/.config/agent-shell/config.yml)"
+        eprint(
+            "error: agent is required (use positional `agent-shell codex`, "
+            "-a codex, or set default_agent in ~/.config/agent-shell/config.yml)"
         )
+        raise typer.Exit(1)
 
     try:
         adapter = normalize_agent(selected_agent)
     except ValueError as err:
-        parser.error(str(err))
+        eprint(f"error: {err}")
+        raise typer.Exit(1)
 
-    workspace = Path(args.mount).expanduser().resolve()
+    workspace = Path(mount).expanduser().resolve()
     if not workspace.is_dir():
-        parser.error(f"mount path does not exist or is not a directory: {workspace}")
+        eprint(f"error: mount path does not exist or is not a directory: {workspace}")
+        raise typer.Exit(1)
 
-    os_family = infer_os_family(args.os_image)
+    os_family = infer_os_family(os_image)
     if os_family == "unknown":
-        parser.error(
-            "unable to infer package manager for --os image. Supported families: "
-            "debian/ubuntu, alpine, fedora/rhel, arch, opensuse."
+        eprint(
+            "error: unable to infer package manager for --os image. "
+            "Supported families: debian/ubuntu, alpine, fedora/rhel, arch, opensuse."
         )
+        raise typer.Exit(1)
 
-    package_groups = args.packages if args.packages else []
-    packages = [pkg for group in package_groups for pkg in group]
+    pkg_list = list(packages) if packages else []
     resolved_allow_sudo = (
-        bool(config.get("default_allow_sudo", DEFAULT_ALLOW_SUDO))
-        if args.allow_sudo is None
-        else args.allow_sudo
+        bool(cfg.get("default_allow_sudo", DEFAULT_ALLOW_SUDO))
+        if allow_sudo is None
+        else allow_sudo
     )
-    if resolved_allow_sudo and args.allow_sudo is None:
+    if resolved_allow_sudo and allow_sudo is None:
         eprint(
             "warning: sudo enabled via config default. "
             "Use --no-allow-sudo to disable."
@@ -679,20 +669,17 @@ def main(argv: list[str]) -> int:
             f"{adapter.name} will likely require authentication."
         )
 
-    try:
-        ensure_docker_engine()
-    except RuntimeError as err:
-        parser.error(str(err))
+    ensure_docker_engine()
 
     cache_key = "|".join(
         [
             f"format={CACHE_FORMAT_VERSION}",
             f"agent={adapter.name}",
-            f"agent_version={args.agent_version or 'default'}",
-            f"os={args.os_image}",
+            f"agent_version={agent_version or 'default'}",
+            f"os={os_image}",
             f"os_family={os_family}",
             f"sudo={int(resolved_allow_sudo)}",
-            f"packages={' '.join(packages)}",
+            f"packages={' '.join(pkg_list)}",
             f"uid={os.getuid()}",
             f"gid={os.getgid()}",
         ]
@@ -705,17 +692,17 @@ def main(argv: list[str]) -> int:
     dockerfile_path = dockerfile_dir / f"{adapter.name}-{digest}.Dockerfile"
 
     dockerfile_content = generate_dockerfile(
-        os_image=args.os_image,
+        os_image=os_image,
         os_family=os_family,
         adapter=adapter,
-        packages=packages,
+        packages=pkg_list,
         allow_sudo=resolved_allow_sudo,
-        agent_version=args.agent_version,
+        agent_version=agent_version,
     )
     dockerfile_path.write_text(dockerfile_content, encoding="utf-8")
 
     image_tag = f"agent-shell/{adapter.name}:{digest}"
-    if args.rebuild:
+    if rebuild:
         build_needed = True
     else:
         inspect = subprocess.run(
@@ -746,14 +733,17 @@ def main(argv: list[str]) -> int:
         except subprocess.CalledProcessError as exc:
             cmd_text = " ".join(shlex.quote(part) for part in build_cmd)
             eprint(f"error: docker build failed ({exc.returncode}): {cmd_text}")
-            return exc.returncode or 1
+            raise typer.Exit(exc.returncode or 1)
     else:
         print(f"Using cached image {image_tag}")
 
-    container_name = args.name
+    container_name = name
     if not container_name:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         container_name = sanitize_name(f"agent-shell-{adapter.name}-{timestamp}")
+
+    resolved_network = network or str(cfg.get("default_network", "none"))
+    resolved_ro = read_only_workspace or bool(cfg.get("default_read_only_workspace", False))
 
     run_cmd = [
         "docker",
@@ -769,9 +759,9 @@ def main(argv: list[str]) -> int:
         "--pids-limit=512",
         "--memory=4g",
         "--cpus=2",
-        f"--network={args.network or config.get('default_network', 'none')}",
+        f"--network={resolved_network}",
         "-v",
-        f"{workspace}:/workspace{':ro' if args.read_only_workspace or config.get('default_read_only_workspace', False) else ''}",
+        f"{workspace}:/workspace{':ro' if resolved_ro else ''}",
     ]
 
     if has_auth_dir:
@@ -781,17 +771,17 @@ def main(argv: list[str]) -> int:
         run_cmd.extend(["-e", f"{adapter.env_var}={os.environ[adapter.env_var]}"])
 
     run_cmd.append(image_tag)
-    if agent_args:
-        run_cmd.extend([adapter.cli_binary, *agent_args])
-    elif args.auto or config.get("default_auto", False):
+    if _agent_passthrough_args:
+        run_cmd.extend([adapter.cli_binary, *_agent_passthrough_args])
+    elif auto or cfg.get("default_auto", False):
         run_cmd.extend([adapter.cli_binary, *adapter.auto_args()])
     else:
         run_cmd.extend(["/bin/bash", "-l"])
 
-    if args.dry_run:
+    if dry_run:
         print(f"# Dockerfile: {dockerfile_path}")
         print(dockerfile_content)
-        print(f"# Run command:")
+        print("# Run command:")
         safe_cmd = []
         for part in run_cmd:
             if part.startswith(f"{adapter.env_var}="):
@@ -799,27 +789,31 @@ def main(argv: list[str]) -> int:
             else:
                 safe_cmd.append(part)
         print(" ".join(shlex.quote(p) for p in safe_cmd))
-        return 0
+        return
 
-    network_mode = args.network or config.get("default_network", "none")
     print(f"Generated Dockerfile: {dockerfile_path}")
     print(f"Launching container {container_name}")
     print(f"  Sandbox: cap_drop=ALL, no-new-privileges, pids_limit=512, memory=4g, cpus=2")
-    print(f"  Network: {network_mode}")
-    resolved_ro = args.read_only_workspace or config.get("default_read_only_workspace", False)
+    print(f"  Network: {resolved_network}")
     ws_mode = "read-only" if resolved_ro else "read-write"
     print(f"  Workspace: {workspace} -> /workspace ({ws_mode})")
     print(f"  Sudo: {'enabled' if resolved_allow_sudo else 'disabled'}")
     try:
         result = subprocess.run(run_cmd)
-        return result.returncode
+        raise typer.Exit(result.returncode)
     except OSError as exc:
         eprint(f"error: failed to start docker run: {exc}")
-        return 1
+        raise typer.Exit(1)
 
 
 def entrypoint() -> None:
-    raise SystemExit(main(sys.argv[1:]))
+    global _agent_passthrough_args
+    argv = sys.argv[1:]
+    if "--" in argv:
+        idx = argv.index("--")
+        _agent_passthrough_args = argv[idx + 1 :]
+        sys.argv = [sys.argv[0], *argv[:idx]]
+    app()
 
 
 if __name__ == "__main__":
