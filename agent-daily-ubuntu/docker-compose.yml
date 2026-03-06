@@ -1,8 +1,8 @@
 services:
   codex-agent-daily:
     build:
-      context: ../..
-      dockerfile: docker/agent-daily-ubuntu/Dockerfile
+      context: .
+      dockerfile: Dockerfile
       args:
         UID: ${HOST_UID:-1000}
         GID: ${HOST_GID:-1000}
