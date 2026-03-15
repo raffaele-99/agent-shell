@@ -10,15 +10,47 @@ from starlette.responses import HTMLResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from ...core.adapters import get_adapter
+from ...core.sandboxes import list_running_sandboxes
+
+
+def _get_token(request: Request) -> str:
+    """Extract auth token from cookie or query param."""
+    return request.cookies.get("sandboxer_token", "") or request.query_params.get("token", "")
+
 
 async def terminal_page(request: Request) -> HTMLResponse:
     """Render the full-screen terminal page."""
     name = request.path_params["name"]
+    token = _get_token(request)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
         "terminal.html",
-        {"sandbox_name": name},
+        {"sandbox_name": name, "ws_token": token, "mode": "shell"},
+    )
+
+
+async def agent_terminal_page(request: Request) -> HTMLResponse:
+    """Render terminal page that launches the agent CLI."""
+    name = request.path_params["name"]
+    token = _get_token(request)
+
+    # Look up the agent type for this sandbox to display in the UI.
+    sandboxes = await asyncio.to_thread(list_running_sandboxes)
+    sandbox = next((s for s in sandboxes if s.name == name), None)
+    agent_type = sandbox.agent if sandbox else ""
+
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "terminal.html",
+        {
+            "sandbox_name": name,
+            "ws_token": token,
+            "mode": "agent",
+            "agent_type": agent_type,
+        },
     )
 
 
@@ -27,11 +59,35 @@ async def terminal_websocket(websocket: WebSocket) -> None:
     name = websocket.path_params["name"]
     session_mgr = websocket.app.state.session_manager
 
+    # Determine command: agent mode launches the agent CLI, shell mode launches bash.
+    mode = websocket.query_params.get("mode", "shell")
+    command: list[str] | None = None
+    env: dict[str, str] | None = None
+
+    if mode == "agent":
+        # Look up sandbox to find agent type.
+        sandboxes = await asyncio.to_thread(list_running_sandboxes)
+        sandbox = next((s for s in sandboxes if s.name == name), None)
+        if sandbox and sandbox.agent:
+            adapter = get_adapter(sandbox.agent)
+            if adapter and adapter.cli_binary:
+                command = [adapter.cli_binary] + list(adapter.auto_args)
+
+        # Pass proxy env vars if available.
+        try:
+            from ...core.sandboxes import _proxy_env
+
+            env = _proxy_env(name) or None
+        except Exception:
+            pass
+
     await websocket.accept()
 
-    session_id = f"{name}-{uuid.uuid4().hex[:8]}"
+    session_id = f"{name}-{mode}-{uuid.uuid4().hex[:8]}"
     try:
-        session = session_mgr.create(session_id, name)
+        session = session_mgr.create(
+            session_id, name, command=command, env=env
+        )
     except Exception as exc:
         await websocket.send_text(f"\r\nError starting session: {exc}\r\n")
         await websocket.close()
@@ -87,5 +143,6 @@ async def terminal_websocket(websocket: WebSocket) -> None:
 
 routes = [
     Route("/terminal/{name}", terminal_page),
+    Route("/terminal/{name}/agent", agent_terminal_page),
     WebSocketRoute("/ws/terminal/{name}", terminal_websocket),
 ]

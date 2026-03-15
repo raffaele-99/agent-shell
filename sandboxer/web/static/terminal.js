@@ -7,9 +7,11 @@
   var statusText = document.getElementById("status-text");
   var container = document.getElementById("terminal-container");
 
+  var isMobile = ("ontouchstart" in window || navigator.maxTouchPoints > 0);
+
   var term = new window.Terminal({
     cursorBlink: true,
-    fontSize: 14,
+    fontSize: isMobile ? 12 : 14,
     fontFamily: "'Menlo', 'DejaVu Sans Mono', 'Courier New', monospace",
     theme: {
       background: "#0f172a",
@@ -17,6 +19,8 @@
       cursor: "#06b6d4",
       selectionBackground: "#334155",
     },
+    // Mobile: prevent xterm from swallowing touch events needed for keyboard
+    allowProposedApi: true,
   });
 
   var fitAddon = new window.FitAddon.FitAddon();
@@ -27,6 +31,17 @@
 
   term.open(container);
   fitAddon.fit();
+
+  // Mobile: ensure tapping the terminal focuses the hidden textarea so the
+  // on-screen keyboard appears and xterm receives keystrokes.
+  if (isMobile) {
+    container.addEventListener("touchstart", function () {
+      term.focus();
+      // xterm.js uses a hidden <textarea> for input — make sure it's focused
+      var ta = container.querySelector(".xterm-helper-textarea");
+      if (ta) ta.focus();
+    });
+  }
 
   var ws = null;
   var reconnectDelay = 1000;
@@ -57,12 +72,13 @@
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
     var url = proto + "//" + location.host + "/ws/terminal/" + sandboxName;
 
-    // Forward auth cookie automatically; add token param if present.
-    var params = new URLSearchParams(location.search);
-    var token = params.get("token");
-    if (token) {
-      url += "?token=" + encodeURIComponent(token);
-    }
+    // Build query params: auth token + mode (shell or agent).
+    var qp = [];
+    var token = window.WS_TOKEN || new URLSearchParams(location.search).get("token");
+    if (token) qp.push("token=" + encodeURIComponent(token));
+    var mode = window.WS_MODE || "shell";
+    if (mode !== "shell") qp.push("mode=" + encodeURIComponent(mode));
+    if (qp.length) url += "?" + qp.join("&");
 
     setStatus("connecting", "Connecting...");
     ws = new WebSocket(url);
@@ -117,7 +133,7 @@
   var kbdHelper = document.getElementById("kbd-helper");
   if (kbdHelper) {
     // Show on touch devices.
-    if ("ontouchstart" in window || navigator.maxTouchPoints > 0) {
+    if (isMobile) {
       kbdHelper.classList.remove("hidden");
       kbdHelper.classList.add("flex");
     }
@@ -131,23 +147,21 @@
       var esc = btn.getAttribute("data-esc");
 
       if (key) {
-        term.focus();
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(new TextEncoder().encode(key));
         }
       } else if (ctrl) {
-        // Ctrl+<char> = char code - 96
         var code = ctrl.charCodeAt(0) - 96;
-        term.focus();
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(new Uint8Array([code]));
         }
       } else if (esc) {
-        term.focus();
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(new TextEncoder().encode(esc));
         }
       }
+
+      term.focus();
     });
   }
 

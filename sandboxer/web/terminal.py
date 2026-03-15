@@ -16,24 +16,38 @@ if TYPE_CHECKING:
 
 
 class TerminalSession:
-    """Spawn ``docker sandbox exec -it <name> bash`` with a real PTY.
+    """Spawn ``docker sandbox exec -it <name> <command>`` with a real PTY.
 
     The slave fd is connected to the subprocess stdin/stdout/stderr.
     The master fd is exposed for async read/write from the WebSocket handler.
     """
 
-    def __init__(self, sandbox_name: str, *, shell: str = "bash") -> None:
+    def __init__(
+        self,
+        sandbox_name: str,
+        *,
+        command: list[str] | None = None,
+        env: dict[str, str] | None = None,
+    ) -> None:
         self.sandbox_name = sandbox_name
         self._master_fd: int | None = None
         self._process: subprocess.Popen | None = None  # type: ignore[type-arg]
-        self._shell = shell
+        self._command = command or ["bash"]
+        self._env = env
 
     def start(self) -> None:
         master, slave = pty.openpty()
         self._master_fd = master
 
+        cmd = ["docker", "sandbox", "exec", "-it"]
+        if self._env:
+            for key, value in self._env.items():
+                cmd.extend(["-e", f"{key}={value}"])
+        cmd.append(self.sandbox_name)
+        cmd.extend(self._command)
+
         self._process = subprocess.Popen(
-            ["docker", "sandbox", "exec", "-it", self.sandbox_name, self._shell],
+            cmd,
             stdin=slave,
             stdout=slave,
             stderr=slave,
@@ -97,10 +111,17 @@ class SessionManager:
     def __init__(self) -> None:
         self._sessions: dict[str, TerminalSession] = {}
 
-    def create(self, session_id: str, sandbox_name: str) -> TerminalSession:
+    def create(
+        self,
+        session_id: str,
+        sandbox_name: str,
+        *,
+        command: list[str] | None = None,
+        env: dict[str, str] | None = None,
+    ) -> TerminalSession:
         if session_id in self._sessions:
             return self._sessions[session_id]
-        session = TerminalSession(sandbox_name)
+        session = TerminalSession(sandbox_name, command=command, env=env)
         session.start()
         self._sessions[session_id] = session
         return session

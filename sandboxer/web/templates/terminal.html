@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>{{ sandbox_name }} — Terminal</title>
+  <title>{{ sandbox_name }} — {% if mode == 'agent' %}{{ agent_type | default('Agent') }}{% else %}Shell{% endif %}</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = { darkMode: 'class' };
@@ -28,6 +28,9 @@
         <span id="status-text" class="text-xs text-slate-400">Connecting...</span>
       </span>
       <span class="text-xs text-slate-500 font-mono">{{ sandbox_name }}</span>
+      {% if mode == 'agent' %}
+      <span class="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full">{{ agent_type | default('agent') }}</span>
+      {% endif %}
     </div>
     <a href="/" class="text-xs text-slate-400 hover:text-cyan-400 transition-colors">Dashboard</a>
   </div>
@@ -53,6 +56,8 @@
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
   <script>
     window.SANDBOX_NAME = "{{ sandbox_name }}";
+    window.WS_TOKEN = "{{ ws_token }}";
+    window.WS_MODE = "{{ mode | default('shell') }}";
   </script>
   <script src="/static/terminal.js"></script>
 </body>
