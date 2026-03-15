@@ -14,12 +14,18 @@ from ...core.templates import list_templates
 
 
 async def dashboard(request: Request) -> HTMLResponse:
-    sandboxes, templates, agents, cleanup = await asyncio.gather(
-        asyncio.to_thread(list_running_sandboxes),
-        asyncio.to_thread(list_templates),
-        asyncio.to_thread(list_agents),
-        asyncio.to_thread(find_all_cleanup_candidates),
-    )
+    try:
+        sandboxes, templates, agents, cleanup = await asyncio.wait_for(
+            asyncio.gather(
+                asyncio.to_thread(list_running_sandboxes),
+                asyncio.to_thread(list_templates),
+                asyncio.to_thread(list_agents),
+                asyncio.to_thread(find_all_cleanup_candidates),
+            ),
+            timeout=10,
+        )
+    except asyncio.TimeoutError:
+        sandboxes, templates, agents, cleanup = [], [], [], {}
     cleanup_total = sum(len(v) for v in cleanup.values())
     return request.app.state.templates.TemplateResponse(
         request,

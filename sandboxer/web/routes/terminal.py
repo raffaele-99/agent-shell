@@ -89,6 +89,8 @@ async def terminal_websocket(websocket: WebSocket) -> None:
             session_id, name, command=command, env=env
         )
     except Exception as exc:
+        import traceback
+        traceback.print_exc()
         await websocket.send_text(f"\r\nError starting session: {exc}\r\n")
         await websocket.close()
         return
@@ -105,8 +107,9 @@ async def terminal_websocket(websocket: WebSocket) -> None:
                     continue
                 except OSError:
                     break
-        except Exception:
-            pass
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
 
     async def ws_to_pty() -> None:
         """Forward WebSocket input to the PTY."""
@@ -132,8 +135,9 @@ async def terminal_websocket(websocket: WebSocket) -> None:
                 session.write(data)
         except WebSocketDisconnect:
             pass
-        except Exception:
-            pass
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
 
     try:
         await asyncio.gather(pty_to_ws(), ws_to_pty())

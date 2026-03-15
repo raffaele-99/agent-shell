@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}{{ sandbox_name }} — {{ agent_type | capitalize }} Chat{% endblock %}
+
+{% block head %}
+<style>
+  #chat-messages { scroll-behavior: smooth; }
+  .msg-assistant pre { white-space: pre-wrap; word-break: break-word; }
+  .msg-assistant code { font-size: 0.85em; }
+  .streaming-cursor::after { content: ''; display: inline-block; width: 2px; height: 1em; background: #06b6d4; animation: blink 1s step-end infinite; vertical-align: text-bottom; margin-left: 2px; }
+  @keyframes blink { 50% { opacity: 0; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="flex flex-col h-[calc(100vh-5rem)] md:h-[calc(100vh-4rem)]">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between pb-4 shrink-0">
+    <div class="flex items-center gap-3">
+      <a href="/sandboxes/{{ sandbox_name }}" class="text-sm text-slate-400 hover:text-cyan-400 transition-colors">&larr; Back</a>
+      <span class="text-slate-600">|</span>
+      <h1 class="text-lg font-semibold text-white">{{ agent_type | capitalize }}</h1>
+      <span class="text-xs text-slate-500 font-mono hidden sm:inline">{{ sandbox_name }}</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="status-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+      <span id="status-text" class="text-xs text-slate-400">Connecting...</span>
+    </div>
+  </div>
+
+  <!-- Messages -->
+  <div id="chat-messages" class="flex-1 overflow-y-auto space-y-4 pb-4 min-h-0">
+    <div id="welcome-msg" class="bg-slate-800 rounded-xl border border-slate-700 p-4 text-sm text-slate-400">
+      Connecting to {{ agent_type | capitalize }}...
+    </div>
+  </div>
+
+  <!-- Input -->
+  <div class="shrink-0 pt-3 border-t border-slate-700">
+    <form id="chat-form" class="flex gap-2">
+      <input type="text" id="chat-input" autocomplete="off" placeholder="Send a message..."
+             class="flex-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-4 py-3 focus:ring-2 focus:ring-cyan-500 focus:border-transparent min-h-[44px]"
+             disabled>
+      <button type="submit" id="send-btn"
+              class="px-4 py-3 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-medium rounded-lg transition-colors min-h-[44px]"
+              disabled>
+        Send
+      </button>
+    </form>
+  </div>
+</div>
+
+<script>
+(function() {
+  var sandboxName = "{{ sandbox_name }}";
+  var wsToken = "{{ ws_token }}";
+  var messagesEl = document.getElementById("chat-messages");
+  var welcomeEl = document.getElementById("welcome-msg");
+  var inputEl = document.getElementById("chat-input");
+  var formEl = document.getElementById("chat-form");
+  var sendBtn = document.getElementById("send-btn");
+  var statusDot = document.getElementById("status-dot");
+  var statusText = document.getElementById("status-text");
+
+  var ws = null;
+  var currentAssistantEl = null;
+  var isStreaming = false;
+
+  function setStatus(state, text) {
+    var colors = { connecting: "bg-amber-500", connected: "bg-emerald-500", disconnected: "bg-red-500", error: "bg-red-500" };
+    statusDot.className = "w-2 h-2 rounded-full " + (colors[state] || "bg-slate-500");
+    statusText.textContent = text;
+  }
+
+  function scrollToBottom() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function addMessage(role, text) {
+    var div = document.createElement("div");
+    div.className = "rounded-xl p-4 text-sm leading-relaxed ";
+    if (role === "user") {
+      div.className += "bg-cyan-600/20 border border-cyan-500/30 text-cyan-100 ml-8 msg-user";
+      div.textContent = text;
+    } else if (role === "assistant") {
+      div.className += "bg-slate-800 border border-slate-700 text-slate-200 mr-4 msg-assistant";
+      div.innerHTML = formatText(text);
+    } else if (role === "system") {
+      div.className += "bg-slate-800/50 border border-slate-700/50 text-slate-500 text-xs msg-system";
+      div.textContent = text;
+    } else if (role === "error") {
+      div.className += "bg-red-600/20 border border-red-500/30 text-red-400 msg-error";
+      div.textContent = text;
+    } else if (role === "tool") {
+      div.className += "bg-slate-800/50 border border-slate-700/50 text-slate-400 text-xs font-mono msg-tool";
+      div.textContent = text;
+    }
+    messagesEl.appendChild(div);
+    scrollToBottom();
+    return div;
+  }
+
+  function startAssistantMessage() {
+    currentAssistantEl = document.createElement("div");
+    currentAssistantEl.className = "bg-slate-800 border border-slate-700 text-slate-200 mr-4 rounded-xl p-4 text-sm leading-relaxed msg-assistant streaming-cursor";
+    currentAssistantEl.textContent = "";
+    messagesEl.appendChild(currentAssistantEl);
+    scrollToBottom();
+    isStreaming = true;
+  }
+
+  function appendToAssistant(text) {
+    if (!currentAssistantEl) startAssistantMessage();
+    currentAssistantEl.innerHTML = formatText(currentAssistantEl.getAttribute("data-raw-text") || "");
+    var raw = (currentAssistantEl.getAttribute("data-raw-text") || "") + text;
+    currentAssistantEl.setAttribute("data-raw-text", raw);
+    currentAssistantEl.innerHTML = formatText(raw);
+    scrollToBottom();
+  }
+
+  function finishAssistantMessage() {
+    if (currentAssistantEl) {
+      currentAssistantEl.classList.remove("streaming-cursor");
+      currentAssistantEl = null;
+    }
+    isStreaming = false;
+  }
+
+  function formatText(text) {
+    // Simple markdown-ish formatting: code blocks, inline code, bold
+    var escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    // Code blocks
+    escaped = escaped.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
+      return '<pre class="bg-slate-900 rounded-lg p-3 my-2 overflow-x-auto"><code>' + code.trim() + '</code></pre>';
+    });
+    // Inline code
+    escaped = escaped.replace(/`([^`]+)`/g, '<code class="bg-slate-700 px-1.5 py-0.5 rounded text-cyan-300">$1</code>');
+    // Bold
+    escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong class="text-white">$1</strong>');
+    // Newlines
+    escaped = escaped.replace(/\n/g, '<br>');
+    return escaped;
+  }
+
+  function connect() {
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    var url = proto + "//" + location.host + "/ws/chat/" + sandboxName;
+    if (wsToken) url += "?token=" + encodeURIComponent(wsToken);
+
+    setStatus("connecting", "Connecting...");
+    ws = new WebSocket(url);
+
+    ws.onopen = function() {
+      setStatus("connected", "Connected");
+      welcomeEl.remove();
+      inputEl.disabled = false;
+      sendBtn.disabled = false;
+      inputEl.focus();
+    };
+
+    ws.onmessage = function(ev) {
+      try {
+        var msg = JSON.parse(ev.data);
+        handleMessage(msg);
+      } catch(e) {
+        // plain text fallback
+        addMessage("assistant", ev.data);
+      }
+    };
+
+    ws.onclose = function() {
+      setStatus("disconnected", "Disconnected");
+      inputEl.disabled = true;
+      sendBtn.disabled = true;
+      finishAssistantMessage();
+    };
+
+    ws.onerror = function() {
+      setStatus("error", "Connection error");
+    };
+  }
+
+  function handleMessage(msg) {
+    if (msg.type === "system" && msg.subtype === "init") {
+      addMessage("system", "Session started · Model: " + (msg.model || "unknown") + " · " + (msg.tools || []).length + " tools available");
+    } else if (msg.type === "assistant") {
+      finishAssistantMessage();
+      var content = msg.message && msg.message.content;
+      if (content && Array.isArray(content)) {
+        for (var i = 0; i < content.length; i++) {
+          var block = content[i];
+          if (block.type === "text" && block.text) {
+            addMessage("assistant", block.text);
+          } else if (block.type === "tool_use") {
+            addMessage("tool", "Using tool: " + block.name + (block.input ? " " + JSON.stringify(block.input).substring(0, 200) : ""));
+          }
+        }
+      }
+    } else if (msg.type === "content_block_delta") {
+      if (msg.delta && msg.delta.text) {
+        appendToAssistant(msg.delta.text);
+      }
+    } else if (msg.type === "content_block_start") {
+      if (msg.content_block && msg.content_block.type === "text") {
+        startAssistantMessage();
+      } else if (msg.content_block && msg.content_block.type === "tool_use") {
+        finishAssistantMessage();
+        addMessage("tool", "Using tool: " + msg.content_block.name + "...");
+      }
+    } else if (msg.type === "content_block_stop") {
+      finishAssistantMessage();
+    } else if (msg.type === "result") {
+      finishAssistantMessage();
+      if (msg.is_error && msg.result) {
+        addMessage("error", msg.result);
+      } else if (msg.result && !isStreaming) {
+        // Final result if we haven't already shown it via streaming
+        var shown = messagesEl.querySelectorAll(".msg-assistant");
+        if (shown.length === 0 || (shown.length > 0 && shown[shown.length-1].textContent === "")) {
+          addMessage("assistant", msg.result);
+        }
+      }
+      // Show cost if available
+      if (msg.total_cost_usd > 0) {
+        addMessage("system", "Cost: $" + msg.total_cost_usd.toFixed(4) + " · " + (msg.num_turns || 1) + " turn(s)");
+      }
+    }
+  }
+
+  formEl.addEventListener("submit", function(e) {
+    e.preventDefault();
+    var text = inputEl.value.trim();
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+    addMessage("user", text);
+    ws.send(JSON.stringify({ type: "user", message: text }));
+    inputEl.value = "";
+    inputEl.focus();
+  });
+
+  connect();
+})();
+</script>
+{% endblock %}

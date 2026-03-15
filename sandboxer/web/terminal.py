@@ -9,10 +9,15 @@ import signal
 import struct
 import subprocess
 import termios
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     pass
+
+# Dedicated thread pool for PTY I/O so it never starves the default executor
+# used by route handlers (asyncio.to_thread).
+_pty_executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="pty")
 
 
 class TerminalSession:
@@ -63,9 +68,9 @@ class TerminalSession:
         return self._master_fd
 
     async def read(self, size: int = 4096) -> bytes:
-        """Read from the PTY master fd (non-blocking via asyncio)."""
+        """Read from the PTY master fd (non-blocking via dedicated executor)."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, os.read, self.master_fd, size)
+        return await loop.run_in_executor(_pty_executor, os.read, self.master_fd, size)
 
     def write(self, data: bytes) -> None:
         """Write to the PTY master fd."""
