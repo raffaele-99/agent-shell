@@ -37,11 +37,6 @@ def create_sandbox(
 
     extra_args: list[str] = []
 
-    # Network mode from template or global config.
-    net = template.network or config.network_mode
-    if net:
-        extra_args.extend(["--network", net])
-
     # Credential proxy integration.
     proxy_url: str | None = None
     if agent.api_key_env_var:
