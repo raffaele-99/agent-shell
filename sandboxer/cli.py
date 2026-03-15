@@ -377,8 +377,8 @@ def agent_create(
     ] = None,
 ) -> None:
     """Create an agent profile."""
-    # Default env var from agent type if not specified.
-    if not api_key_env_var:
+    # Default env var from agent type if not specified and no auth_dir provided.
+    if not api_key_env_var and not auth_dir:
         defaults = {
             "claude": "ANTHROPIC_API_KEY",
             "codex": "OPENAI_API_KEY",
