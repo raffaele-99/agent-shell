@@ -8,18 +8,36 @@
   .msg-assistant code { font-size: 0.85em; }
   .streaming-cursor::after { content: ''; display: inline-block; width: 2px; height: 1em; background: #06b6d4; animation: blink 1s step-end infinite; vertical-align: text-bottom; margin-left: 2px; }
   @keyframes blink { 50% { opacity: 0; } }
+  #session-dropdown.hidden { display: none; }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="flex flex-col h-[calc(100vh-5rem)] md:h-[calc(100vh-4rem)]">
+<div class="flex flex-col h-[calc(100vh-5rem)] md:h-[calc(100vh-4rem)] relative">
 
   <!-- Header -->
   <div class="flex items-center justify-between pb-4 shrink-0">
     <div class="flex items-center gap-3">
       <a href="/sandboxes/{{ sandbox_name }}" class="text-sm text-slate-400 hover:text-cyan-400 transition-colors">&larr; Back</a>
       <span class="text-slate-600">|</span>
-      <h1 class="text-lg font-semibold text-white">{{ agent_type | capitalize }}</h1>
+      <div class="relative">
+        <button onclick="toggleDropdown()" id="session-toggle-btn" class="text-sm text-slate-400 hover:text-cyan-400 transition-colors flex items-center gap-1.5" title="Sessions">
+          <span id="session-title" class="max-w-[120px] sm:max-w-[200px] truncate">{{ agent_type | capitalize }}</span>
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <!-- Session Dropdown -->
+        <div id="session-dropdown" class="hidden absolute left-0 top-full mt-2 w-72 bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden">
+          <div class="p-2 border-b border-slate-700">
+            <button onclick="createNewSession()" class="w-full px-3 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2 min-h-[44px]">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+              New Chat
+            </button>
+          </div>
+          <div id="session-list" class="max-h-64 overflow-y-auto p-2 space-y-1">
+            <div class="text-xs text-slate-500 text-center py-3">Loading...</div>
+          </div>
+        </div>
+      </div>
       <span class="text-xs text-slate-500 font-mono hidden sm:inline">{{ sandbox_name }}</span>
     </div>
     <div class="flex items-center gap-2">
@@ -54,6 +72,7 @@
 (function() {
   var sandboxName = "{{ sandbox_name }}";
   var wsToken = "{{ ws_token }}";
+  var currentSessionId = "{{ session_id }}";
   var messagesEl = document.getElementById("chat-messages");
   var welcomeEl = document.getElementById("welcome-msg");
   var inputEl = document.getElementById("chat-input");
@@ -61,10 +80,123 @@
   var sendBtn = document.getElementById("send-btn");
   var statusDot = document.getElementById("status-dot");
   var statusText = document.getElementById("status-text");
+  var sessionListEl = document.getElementById("session-list");
+  var sessionTitleEl = document.getElementById("session-title");
+  var dropdownEl = document.getElementById("session-dropdown");
 
   var ws = null;
   var currentAssistantEl = null;
   var isStreaming = false;
+
+  // --- Session management ---
+
+  window.toggleDropdown = function() {
+    var isOpen = !dropdownEl.classList.contains("hidden");
+    if (isOpen) {
+      dropdownEl.classList.add("hidden");
+    } else {
+      dropdownEl.classList.remove("hidden");
+      loadSessions();
+    }
+  };
+
+  // Close dropdown when clicking outside
+  document.addEventListener("click", function(e) {
+    if (!dropdownEl.classList.contains("hidden") && !e.target.closest("#session-dropdown") && !e.target.closest("#session-toggle-btn")) {
+      dropdownEl.classList.add("hidden");
+    }
+  });
+
+  function loadSessions() {
+    var url = "/chat/" + sandboxName + "/sessions";
+    if (wsToken) url += "?token=" + encodeURIComponent(wsToken);
+    fetch(url)
+      .then(function(r) { return r.json(); })
+      .then(function(sessions) {
+        if (!sessions || sessions.length === 0) {
+          sessionListEl.innerHTML = '<div class="text-xs text-slate-500 text-center py-4">No previous sessions</div>';
+          return;
+        }
+        var html = "";
+        for (var i = 0; i < sessions.length; i++) {
+          var s = sessions[i];
+          var isActive = s.id === currentSessionId;
+          var title = s.title || "Untitled";
+          if (title.length > 50) title = title.substring(0, 50) + "...";
+          var date = new Date(s.created_at * 1000);
+          var dateStr = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+          var timeStr = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+          var activeClass = isActive
+            ? "bg-cyan-600/20 border-cyan-500/30 text-cyan-100"
+            : "bg-slate-700/30 border-slate-700 text-slate-300 hover:bg-slate-700/60";
+          html += '<div class="flex items-center gap-1">'
+            + '<button onclick="switchSession(\'' + s.id + '\')" class="flex-1 min-w-0 text-left rounded-lg border px-3 py-2 text-sm transition-colors ' + activeClass + '">'
+            + '<div class="truncate">' + escapeHtml(title) + '</div>'
+            + '<div class="text-xs text-slate-500 mt-0.5">' + dateStr + ' ' + timeStr + ' · ' + s.message_count + ' msgs</div>'
+            + '</button>'
+            + '<button onclick="event.stopPropagation(); deleteSession(\'' + s.id + '\')" class="text-slate-500 hover:text-red-400 p-1.5 shrink-0" title="Delete">'
+            + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>'
+            + '</button>'
+            + '</div>';
+        }
+        sessionListEl.innerHTML = html;
+      })
+      .catch(function() {
+        sessionListEl.innerHTML = '<div class="text-xs text-red-400 text-center py-4">Failed to load sessions</div>';
+      });
+  }
+
+  window.switchSession = function(sessionId) {
+    if (sessionId === currentSessionId) {
+      toggleDrawer();
+      return;
+    }
+    // Navigate to the session
+    var url = "/chat/" + sandboxName + "?session=" + encodeURIComponent(sessionId);
+    if (wsToken) url += "&token=" + encodeURIComponent(wsToken);
+    window.location.href = url;
+  };
+
+  window.createNewSession = function() {
+    var url = "/chat/" + sandboxName + "/sessions";
+    if (wsToken) url += "?token=" + encodeURIComponent(wsToken);
+    fetch(url, { method: "POST" })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.id) {
+          var navUrl = "/chat/" + sandboxName + "?session=" + encodeURIComponent(data.id);
+          if (wsToken) navUrl += "&token=" + encodeURIComponent(wsToken);
+          window.location.href = navUrl;
+        }
+      })
+      .catch(function() {});
+  };
+
+  window.deleteSession = function(sessionId) {
+    if (!confirm("Delete this session?")) return;
+    var url = "/chat/" + sandboxName + "/sessions/" + sessionId;
+    if (wsToken) url += "?token=" + encodeURIComponent(wsToken);
+    fetch(url, { method: "DELETE" })
+      .then(function() {
+        if (sessionId === currentSessionId) {
+          // Deleted current session — go to chat without a session
+          var navUrl = "/chat/" + sandboxName;
+          if (wsToken) navUrl += "?token=" + encodeURIComponent(wsToken);
+          window.location.href = navUrl;
+        } else {
+          loadSessions();
+        }
+      })
+      .catch(function() {});
+  };
+
+  function escapeHtml(text) {
+    var d = document.createElement("div");
+    d.textContent = text;
+    return d.innerHTML;
+  }
+
+  // --- Status / UI helpers ---
 
   function setStatus(state, text) {
     var colors = { connecting: "bg-amber-500", connected: "bg-emerald-500", disconnected: "bg-red-500", error: "bg-red-500" };
@@ -92,8 +224,8 @@
       div.className += "bg-red-600/20 border border-red-500/30 text-red-400 msg-error";
       div.textContent = text;
     } else if (role === "tool") {
-      div.className += "bg-slate-800/50 border border-slate-700/50 text-slate-400 text-xs font-mono msg-tool";
-      div.textContent = text;
+      div.className += "bg-slate-800/50 border border-slate-700/50 text-slate-400 text-xs msg-tool";
+      div.innerHTML = formatTool(text);
     }
     messagesEl.appendChild(div);
     scrollToBottom();
@@ -111,7 +243,6 @@
 
   function appendToAssistant(text) {
     if (!currentAssistantEl) startAssistantMessage();
-    currentAssistantEl.innerHTML = formatText(currentAssistantEl.getAttribute("data-raw-text") || "");
     var raw = (currentAssistantEl.getAttribute("data-raw-text") || "") + text;
     currentAssistantEl.setAttribute("data-raw-text", raw);
     currentAssistantEl.innerHTML = formatText(raw);
@@ -126,33 +257,94 @@
     isStreaming = false;
   }
 
+  // --- Formatting ---
+
+  function formatTool(text) {
+    var lines = text.split("\n");
+    var label = lines[0] || "";
+    var output = lines.slice(1).join("\n").trim();
+    var escaped_label = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    var html = '<div class="flex items-center gap-2 mb-1">'
+      + '<svg class="w-3 h-3 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>'
+      + '<span class="font-mono text-slate-300">' + escaped_label + '</span></div>';
+    if (output) {
+      var escaped_out = output.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      html += '<pre class="bg-slate-900/50 rounded p-2 mt-1 overflow-x-auto text-xs text-slate-500 max-h-48 overflow-y-auto"><code>' + escaped_out + '</code></pre>';
+    }
+    return html;
+  }
+
   function formatText(text) {
-    // Simple markdown-ish formatting: code blocks, inline code, bold
+    var parts = text.split(/(```[\s\S]*?```)/g);
+    var result = "";
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i];
+      if (part.match(/^```/)) {
+        var m = part.match(/^```(\w*)\n?([\s\S]*?)```$/);
+        if (m) {
+          result += '<pre class="bg-slate-900 rounded-lg p-3 my-2 overflow-x-auto text-sm"><code>'
+            + m[2].trim().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+            + '</code></pre>';
+        }
+      } else {
+        result += formatInline(part);
+      }
+    }
+    return result;
+  }
+
+  function formatInline(text) {
     var escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    // Code blocks
-    escaped = escaped.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
-      return '<pre class="bg-slate-900 rounded-lg p-3 my-2 overflow-x-auto"><code>' + code.trim() + '</code></pre>';
-    });
-    // Inline code
     escaped = escaped.replace(/`([^`]+)`/g, '<code class="bg-slate-700 px-1.5 py-0.5 rounded text-cyan-300">$1</code>');
-    // Bold
     escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong class="text-white">$1</strong>');
-    // Newlines
+    escaped = escaped.replace(/^(#{1,4})\s+(.+)$/gm, function(_, hashes, txt) {
+      var sz = hashes.length <= 2 ? "text-base font-bold text-white" : "text-sm font-semibold text-white";
+      return '<div class="' + sz + ' mt-3 mb-1">' + txt + '</div>';
+    });
+    escaped = escaped.replace(/^- (.+)$/gm, '<div class="pl-4 before:content-[\'•\'] before:mr-2 before:text-slate-500">$1</div>');
+    escaped = escaped.replace(/\n\n+/g, '<div class="h-3"></div>');
     escaped = escaped.replace(/\n/g, '<br>');
     return escaped;
+  }
+
+  // --- History & WebSocket ---
+
+  function loadHistory() {
+    if (!currentSessionId) return;
+    var histUrl = "/chat/" + sandboxName + "/history?session=" + encodeURIComponent(currentSessionId);
+    if (wsToken) histUrl += "&token=" + encodeURIComponent(wsToken);
+    fetch(histUrl)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.messages && data.messages.length > 0) {
+          if (welcomeEl && welcomeEl.parentNode) welcomeEl.remove();
+          for (var i = 0; i < data.messages.length; i++) {
+            var m = data.messages[i];
+            addMessage(m.role, m.text);
+          }
+          // Update title from session data
+          if (data.title) {
+            sessionTitleEl.textContent = data.title;
+          }
+        }
+      })
+      .catch(function() {});
   }
 
   function connect() {
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
     var url = proto + "//" + location.host + "/ws/chat/" + sandboxName;
-    if (wsToken) url += "?token=" + encodeURIComponent(wsToken);
+    var params = [];
+    if (currentSessionId) params.push("session=" + encodeURIComponent(currentSessionId));
+    if (wsToken) params.push("token=" + encodeURIComponent(wsToken));
+    if (params.length) url += "?" + params.join("&");
 
     setStatus("connecting", "Connecting...");
     ws = new WebSocket(url);
 
     ws.onopen = function() {
       setStatus("connected", "Connected");
-      welcomeEl.remove();
+      if (welcomeEl && welcomeEl.parentNode) welcomeEl.remove();
       inputEl.disabled = false;
       sendBtn.disabled = false;
       inputEl.focus();
@@ -163,7 +355,6 @@
         var msg = JSON.parse(ev.data);
         handleMessage(msg);
       } catch(e) {
-        // plain text fallback
         addMessage("assistant", ev.data);
       }
     };
@@ -181,6 +372,17 @@
   }
 
   function handleMessage(msg) {
+    // Session auto-created by server
+    if (msg.type === "session.created" && msg.session_id) {
+      currentSessionId = msg.session_id;
+      // Update URL without reload
+      var newUrl = "/chat/" + sandboxName + "?session=" + encodeURIComponent(currentSessionId);
+      if (wsToken) newUrl += "&token=" + encodeURIComponent(wsToken);
+      history.replaceState(null, "", newUrl);
+      return;
+    }
+
+    // --- Claude stream-json events ---
     if (msg.type === "system" && msg.subtype === "init") {
       addMessage("system", "Session started · Model: " + (msg.model || "unknown") + " · " + (msg.tools || []).length + " tools available");
     } else if (msg.type === "assistant") {
@@ -209,20 +411,66 @@
       }
     } else if (msg.type === "content_block_stop") {
       finishAssistantMessage();
+
+    // --- Codex JSONL events ---
+    } else if (msg.type === "thread.started") {
+      // Silently captured — session ID is tracked server-side.
+    } else if (msg.type === "turn.started") {
+      // Don't start a streaming div here — wait for actual content.
+    } else if (msg.type === "item.started" && msg.item) {
+      if (msg.item.type === "command_execution" && msg.item.command) {
+        var el = addMessage("tool", msg.item.command + " …");
+        el.setAttribute("data-item-id", msg.item.id || "");
+      }
+    } else if (msg.type === "item.completed" && msg.item) {
+      if (msg.item.type === "agent_message" && msg.item.text) {
+        finishAssistantMessage();
+        addMessage("assistant", msg.item.text);
+      } else if (msg.item.type === "command_execution") {
+        var pending = messagesEl.querySelector('[data-item-id="' + (msg.item.id || "") + '"]');
+        if (pending) pending.remove();
+        var cmd = msg.item.command || "command";
+        var exitBadge = msg.item.exit_code === 0
+          ? " ✓"
+          : " ✗ exit " + msg.item.exit_code;
+        var output = msg.item.aggregated_output || "";
+        if (output.length > 1000) output = output.substring(0, 1000) + "\n…";
+        addMessage("tool", cmd + exitBadge + (output ? "\n" + output : ""));
+      } else if (msg.item.type === "tool_call") {
+        addMessage("tool", (msg.item.name || msg.item.call_id || "tool"));
+      }
+    } else if (msg.type === "turn.completed") {
+      finishAssistantMessage();
+      if (msg.usage) {
+        var cached = msg.usage.cached_input_tokens || 0;
+        var input = msg.usage.input_tokens || 0;
+        var output = msg.usage.output_tokens || 0;
+        addMessage("system", "Done · " + output + " output tokens" + (cached ? " · " + cached + " cached" : ""));
+      }
+
+    // --- Common events ---
     } else if (msg.type === "result") {
       finishAssistantMessage();
       if (msg.is_error && msg.result) {
         addMessage("error", msg.result);
       } else if (msg.result && !isStreaming) {
-        // Final result if we haven't already shown it via streaming
         var shown = messagesEl.querySelectorAll(".msg-assistant");
         if (shown.length === 0 || (shown.length > 0 && shown[shown.length-1].textContent === "")) {
           addMessage("assistant", msg.result);
         }
       }
-      // Show cost if available
       if (msg.total_cost_usd > 0) {
         addMessage("system", "Cost: $" + msg.total_cost_usd.toFixed(4) + " · " + (msg.num_turns || 1) + " turn(s)");
+      }
+      // Update session title after first response
+      if (!sessionTitleEl.getAttribute("data-titled")) {
+        var userMsgs = messagesEl.querySelectorAll(".msg-user");
+        if (userMsgs.length > 0) {
+          var firstText = userMsgs[0].textContent;
+          if (firstText.length > 40) firstText = firstText.substring(0, 40) + "...";
+          sessionTitleEl.textContent = firstText;
+          sessionTitleEl.setAttribute("data-titled", "1");
+        }
       }
     }
   }
@@ -238,6 +486,7 @@
     inputEl.focus();
   });
 
+  loadHistory();
   connect();
 })();
 </script>
