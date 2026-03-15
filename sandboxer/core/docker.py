@@ -131,9 +131,19 @@ def list_sandboxes() -> list[SandboxRow]:
 
     # Parse the header to find column positions.
     header = lines[0]
-    # Common headers: NAME, STATUS, IMAGE (columns vary by Docker version).
     col_names = re.split(r"\s{2,}", header.strip())
     col_starts = [header.index(c) for c in col_names]
+
+    # Build a lookup so we can extract by column name regardless of order.
+    def _col_index(name: str) -> int | None:
+        for i, c in enumerate(col_names):
+            if c.upper() == name.upper():
+                return i
+        return None
+
+    name_idx = _col_index("SANDBOX") or _col_index("NAME") or 0
+    status_idx = _col_index("STATUS")
+    image_idx = _col_index("IMAGE")
 
     for line in lines[1:]:
         if not line.strip():
@@ -143,9 +153,13 @@ def list_sandboxes() -> list[SandboxRow]:
             end = col_starts[i + 1] if i + 1 < len(col_starts) else len(line)
             parts.append(line[start:end].strip())
         # Normalise to 3 fields minimum.
-        while len(parts) < 3:
+        while len(parts) < len(col_names):
             parts.append("")
-        rows.append(SandboxRow(name=parts[0], status=parts[1], image=parts[2]))
+        rows.append(SandboxRow(
+            name=parts[name_idx] if name_idx is not None else parts[0],
+            status=parts[status_idx] if status_idx is not None else "",
+            image=parts[image_idx] if image_idx is not None else "",
+        ))
 
     return rows
 
