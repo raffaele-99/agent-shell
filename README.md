@@ -58,7 +58,7 @@ Every container runs with these hardening measures:
 A sandbox summary is printed on each launch so you can verify the boundaries.
 
 ### Config defaults
-Run `./agent-shell --config` to open an interactive setup wizard.  
+Run `agent-shell --config` to open an interactive setup wizard.
 Config file path: `~/.config/agent-shell/config.yml`
 
 Supported keys:
