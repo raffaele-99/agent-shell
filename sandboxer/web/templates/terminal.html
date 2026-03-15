@@ -1,43 +1,52 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" class="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>{{ sandbox_name }} — Terminal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class' };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/css/xterm.css">
+  <link rel="stylesheet" href="/static/style.css">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { height: 100%; overflow: hidden; background: #1e1e1e; }
-    #terminal-container {
-      width: 100%; height: 100%;
-      touch-action: manipulation;
-    }
-    #status-bar {
-      position: fixed; top: 0; left: 0; right: 0;
-      background: #2d2d2d; color: #999; padding: 4px 12px;
-      font-family: monospace; font-size: 12px; z-index: 10;
-      display: flex; justify-content: space-between; align-items: center;
-    }
-    #status-bar a { color: #7eb8da; text-decoration: none; }
-    #status-bar .status-dot {
-      display: inline-block; width: 8px; height: 8px;
-      border-radius: 50%; margin-right: 6px;
-    }
-    #status-bar .status-dot.connected { background: #4caf50; }
-    #status-bar .status-dot.disconnected { background: #f44336; }
-    #status-bar .status-dot.connecting { background: #ff9800; }
+    html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
   </style>
 </head>
-<body>
-  <div id="status-bar">
-    <span>
-      <span id="status-dot" class="status-dot connecting"></span>
-      <span id="status-text">Connecting...</span>
-      {{ sandbox_name }}
-    </span>
-    <a href="/">&larr; Dashboard</a>
+<body class="bg-slate-900 font-['Inter',sans-serif] flex flex-col h-full">
+
+  <!-- Status bar -->
+  <div id="status-bar" class="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700 text-sm shrink-0">
+    <div class="flex items-center gap-3">
+      <a href="/sandboxes/{{ sandbox_name }}" class="text-slate-400 hover:text-cyan-400 transition-colors text-xs">&larr; Back</a>
+      <span class="text-slate-600">|</span>
+      <span class="flex items-center gap-2">
+        <span id="status-dot" class="w-2 h-2 rounded-full bg-amber-500"></span>
+        <span id="status-text" class="text-xs text-slate-400">Connecting...</span>
+      </span>
+      <span class="text-xs text-slate-500 font-mono">{{ sandbox_name }}</span>
+    </div>
+    <a href="/" class="text-xs text-slate-400 hover:text-cyan-400 transition-colors">Dashboard</a>
   </div>
-  <div id="terminal-container"></div>
+
+  <!-- Terminal -->
+  <div id="terminal-container" class="flex-1 xterm-container"></div>
+
+  <!-- Mobile keyboard helper row -->
+  <div id="kbd-helper" class="hidden kbd-helper bg-slate-800 border-t border-slate-700 px-2 py-1.5 flex items-center gap-1 overflow-x-auto shrink-0">
+    <button data-key="|" class="px-3 py-2 bg-slate-700 text-slate-300 text-sm rounded font-mono hover:bg-slate-600">|</button>
+    <button data-key=">" class="px-3 py-2 bg-slate-700 text-slate-300 text-sm rounded font-mono hover:bg-slate-600">&gt;</button>
+    <button data-key="<" class="px-3 py-2 bg-slate-700 text-slate-300 text-sm rounded font-mono hover:bg-slate-600">&lt;</button>
+    <button data-key="~" class="px-3 py-2 bg-slate-700 text-slate-300 text-sm rounded font-mono hover:bg-slate-600">~</button>
+    <button data-key="\t" class="px-3 py-2 bg-slate-700 text-slate-300 text-sm rounded font-mono hover:bg-slate-600">Tab</button>
+    <button data-ctrl="c" class="px-3 py-2 bg-slate-700 text-slate-300 text-sm rounded font-mono hover:bg-slate-600">^C</button>
+    <button data-ctrl="d" class="px-3 py-2 bg-slate-700 text-slate-300 text-sm rounded font-mono hover:bg-slate-600">^D</button>
+    <button data-esc="\x1b[A" class="px-3 py-2 bg-slate-700 text-slate-300 text-sm rounded font-mono hover:bg-slate-600">&uarr;</button>
+    <button data-esc="\x1b[B" class="px-3 py-2 bg-slate-700 text-slate-300 text-sm rounded font-mono hover:bg-slate-600">&darr;</button>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>

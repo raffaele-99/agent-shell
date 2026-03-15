@@ -1,0 +1,25 @@
+<div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+  <div>
+    <div class="text-xs text-slate-400 mb-1">CPU</div>
+    <div class="text-sm font-medium text-white">{{ stats.cpu_percent or '—' }}</div>
+  </div>
+  <div>
+    <div class="text-xs text-slate-400 mb-1">Memory</div>
+    <div class="text-sm font-medium text-white">{{ stats.mem_usage or '—' }}</div>
+    {% if stats.mem_percent %}
+    <div class="text-xs text-slate-500">{{ stats.mem_percent }}</div>
+    {% endif %}
+  </div>
+  <div>
+    <div class="text-xs text-slate-400 mb-1">Net I/O</div>
+    <div class="text-sm font-medium text-white">{{ stats.net_io or '—' }}</div>
+  </div>
+  <div>
+    <div class="text-xs text-slate-400 mb-1">Block I/O</div>
+    <div class="text-sm font-medium text-white">{{ stats.block_io or '—' }}</div>
+  </div>
+  <div>
+    <div class="text-xs text-slate-400 mb-1">PIDs</div>
+    <div class="text-sm font-medium text-white">{{ stats.pids or '—' }}</div>
+  </div>
+</div>

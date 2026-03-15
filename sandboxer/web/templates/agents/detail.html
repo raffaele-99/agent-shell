@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}{{ agent.name }} — Agents — Sandboxer{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl">
+  <div class="mb-6">
+    <a href="/agents/" class="text-sm text-slate-400 hover:text-cyan-400 transition-colors">&larr; Back to Agents</a>
+    <div class="flex items-center gap-3 mt-2">
+      <h1 class="text-2xl font-bold text-white">{{ agent.name }}</h1>
+      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-500/20 text-purple-400">
+        {{ agent.agent_type }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Details card -->
+  <div class="bg-slate-800 rounded-xl border border-slate-700 p-6 mb-6">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div>
+        <div class="text-xs text-slate-400 mb-1">Agent Type</div>
+        <div class="text-sm text-white">{{ agent.agent_type }}</div>
+      </div>
+      <div>
+        <div class="text-xs text-slate-400 mb-1">Auth Method</div>
+        {% if agent.auth_dir %}
+        <div class="text-sm text-white font-mono">Auth dir: {{ agent.auth_dir }}</div>
+        {% elif agent.api_key_env_var %}
+        <div class="text-sm text-white font-mono">Env: {{ agent.api_key_env_var }}</div>
+        {% else %}
+        <div class="text-sm text-slate-500">Not configured</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if agent.default_args %}
+    <div class="mt-4 pt-4 border-t border-slate-700">
+      <div class="text-xs text-slate-400 mb-2">Default Arguments</div>
+      <div class="flex flex-wrap gap-1.5">
+        {% for arg in agent.default_args %}
+        <span class="text-xs bg-slate-700 text-slate-300 px-2 py-0.5 rounded font-mono">{{ arg }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Actions -->
+  <div class="bg-slate-800 rounded-xl border border-slate-700 p-6">
+    <h2 class="text-sm font-semibold text-slate-300 mb-4">Actions</h2>
+    <div class="flex flex-wrap gap-3">
+      <a href="/sandboxes/new?agent={{ agent.name }}"
+         class="inline-flex items-center gap-2 px-4 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium rounded-lg transition-colors min-h-[44px]">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Create Sandbox
+      </a>
+      <button hx-delete="/agents/{{ agent.name }}"
+              hx-confirm="Delete agent profile '{{ agent.name }}'? This cannot be undone."
+              hx-swap="none"
+              class="inline-flex items-center gap-2 px-4 py-2.5 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white text-sm font-medium rounded-lg transition-colors min-h-[44px]">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+        Delete Agent
+      </button>
+    </div>
+  </div>
+</div>
+{% endblock %}

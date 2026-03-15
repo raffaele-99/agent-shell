@@ -9,7 +9,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
 from .auth import TokenAuthMiddleware
-from .routes import dashboard, sandboxes, terminal
+from .routes import agents, dashboard, sandboxes, templates, terminal
 from .terminal import SessionManager
 
 _WEB_DIR = Path(__file__).parent
@@ -20,6 +20,8 @@ def create_app(*, token: str) -> Starlette:
     routes = [
         *dashboard.routes,
         *sandboxes.routes,
+        *templates.routes,
+        *agents.routes,
         *terminal.routes,
         Mount("/static", StaticFiles(directory=_WEB_DIR / "static"), name="static"),
     ]

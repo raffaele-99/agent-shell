@@ -2,34 +2,48 @@
 {% block title %}Dashboard — Sandboxer{% endblock %}
 
 {% block content %}
-<section>
-  <hgroup>
-    <h2>Sandboxes</h2>
-    <p>
-      <button hx-get="/sandboxes" hx-target="#sandbox-list" hx-swap="innerHTML"
-              class="outline secondary" style="display:inline; width:auto; padding: 0.25rem 0.75rem; font-size: 0.85rem;">
-        Refresh
-      </button>
-    </p>
-  </hgroup>
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-white">Dashboard</h1>
+</div>
 
-  <div hx-get="/sandboxes" hx-trigger="every 10s" hx-target="#sandbox-list" hx-swap="innerHTML">
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Status</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="sandbox-list">
-        {% include "partials/sandbox_list.html" %}
-      </tbody>
-    </table>
+<!-- Summary cards -->
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+  <div class="bg-slate-800 rounded-xl border border-slate-700 p-5">
+    <div class="text-sm text-slate-400 mb-1">Active Sandboxes</div>
+    <div class="text-3xl font-bold text-white">{{ sandboxes | length }}</div>
   </div>
+  <div class="bg-slate-800 rounded-xl border border-slate-700 p-5">
+    <div class="text-sm text-slate-400 mb-1">Templates</div>
+    <div class="text-3xl font-bold text-white">{{ template_count }}</div>
+  </div>
+  <div class="bg-slate-800 rounded-xl border border-slate-700 p-5">
+    <div class="text-sm text-slate-400 mb-1">Agents</div>
+    <div class="text-3xl font-bold text-white">{{ agent_count }}</div>
+  </div>
+  <div class="bg-slate-800 rounded-xl border border-slate-700 p-5">
+    <div class="text-sm text-slate-400 mb-1">Cleanup Candidates</div>
+    <div class="text-3xl font-bold text-white">{{ cleanup_total }}</div>
+  </div>
+</div>
 
-  {% if not sandboxes %}
-  <p><small>No sandboxes running. Create one with <code>sandboxer sandbox create</code>.</small></p>
-  {% endif %}
-</section>
+<!-- Active sandboxes -->
+<div class="flex items-center justify-between mb-4">
+  <h2 class="text-lg font-semibold text-white">Active Sandboxes</h2>
+  <div class="flex items-center gap-3">
+    <span class="htmx-indicator">
+      <svg class="animate-spin w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+    </span>
+    <a href="/sandboxes/new"
+       class="inline-flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium rounded-lg transition-colors">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      New Sandbox
+    </a>
+  </div>
+</div>
+
+<div id="sandbox-list"
+     hx-get="/api/sandboxes" hx-trigger="every 10s" hx-swap="innerHTML"
+     hx-indicator=".htmx-indicator">
+  {% include "partials/sandbox_list.html" %}
+</div>
 {% endblock %}

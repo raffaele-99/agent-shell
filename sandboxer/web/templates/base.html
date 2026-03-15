@@ -1,22 +1,72 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" class="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>{% block title %}Sandboxer{% endblock %}</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            accent: { 400: '#22d3ee', 500: '#06b6d4', 600: '#0891b2' },
+          },
+        },
+      },
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <link rel="stylesheet" href="/static/style.css">
   {% block head %}{% endblock %}
 </head>
-<body>
-  <nav class="container">
-    <ul>
-      <li><strong><a href="/">Sandboxer</a></strong></li>
-    </ul>
-  </nav>
-  <main class="container">
+<body class="bg-slate-900 text-slate-200 font-['Inter',sans-serif] min-h-screen">
+
+  {% include "partials/nav.html" %}
+
+  <!-- Main content -->
+  <main class="md:ml-60 pb-20 md:pb-8 p-4 md:p-8 min-h-screen">
     {% block content %}{% endblock %}
   </main>
+
+  <!-- Toast container -->
+  <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2"></div>
+
+  <script>
+    // Toast notification system driven by HX-Trigger headers
+    document.body.addEventListener('showToast', function(e) {
+      var msg = (e.detail && e.detail.message) || 'Done';
+      var level = (e.detail && e.detail.level) || 'success';
+      var colors = {
+        success: 'bg-emerald-600',
+        error: 'bg-red-600',
+        info: 'bg-cyan-600',
+      };
+      var toast = document.createElement('div');
+      toast.className = 'px-4 py-3 rounded-lg text-white text-sm shadow-lg transition-all duration-300 opacity-0 ' + (colors[level] || colors.info);
+      toast.textContent = msg;
+      document.getElementById('toast-container').appendChild(toast);
+      requestAnimationFrame(function() { toast.classList.replace('opacity-0', 'opacity-100'); });
+      setTimeout(function() {
+        toast.classList.replace('opacity-100', 'opacity-0');
+        setTimeout(function() { toast.remove(); }, 300);
+      }, 3000);
+    });
+
+    // Highlight active nav link
+    (function() {
+      var path = location.pathname;
+      document.querySelectorAll('[data-nav]').forEach(function(el) {
+        var nav = el.getAttribute('data-nav');
+        if (nav === '/' ? path === '/' : path.startsWith(nav)) {
+          el.classList.add('bg-slate-700', 'text-white');
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

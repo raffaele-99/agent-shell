@@ -1,0 +1,20 @@
+<div class="bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-3">
+  <div class="flex items-start justify-between">
+    <a href="/agents/{{ a.name }}" class="text-sm font-semibold text-white hover:text-cyan-400 transition-colors">
+      {{ a.name }}
+    </a>
+    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-500/20 text-purple-400 whitespace-nowrap">
+      {{ a.agent_type }}
+    </span>
+  </div>
+
+  <div class="text-xs text-slate-400">
+    {% if a.auth_dir %}
+    Auth dir: <span class="font-mono">{{ a.auth_dir }}</span>
+    {% elif a.api_key_env_var %}
+    Env: <span class="font-mono">{{ a.api_key_env_var }}</span>
+    {% else %}
+    No auth configured
+    {% endif %}
+  </div>
+</div>

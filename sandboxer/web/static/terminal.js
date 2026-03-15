@@ -7,14 +7,16 @@
   var statusText = document.getElementById("status-text");
   var container = document.getElementById("terminal-container");
 
-  // Offset for the status bar.
-  container.style.paddingTop = "28px";
-
   var term = new window.Terminal({
     cursorBlink: true,
     fontSize: 14,
     fontFamily: "'Menlo', 'DejaVu Sans Mono', 'Courier New', monospace",
-    theme: { background: "#1e1e1e" },
+    theme: {
+      background: "#0f172a",
+      foreground: "#e2e8f0",
+      cursor: "#06b6d4",
+      selectionBackground: "#334155",
+    },
   });
 
   var fitAddon = new window.FitAddon.FitAddon();
@@ -30,8 +32,14 @@
   var reconnectDelay = 1000;
   var maxReconnectDelay = 16000;
 
+  var statusColors = {
+    connecting: "bg-amber-500",
+    connected: "bg-emerald-500",
+    disconnected: "bg-red-500",
+  };
+
   function setStatus(state, text) {
-    statusDot.className = "status-dot " + state;
+    statusDot.className = "w-2 h-2 rounded-full " + (statusColors[state] || "bg-slate-500");
     statusText.textContent = text;
   }
 
@@ -104,6 +112,44 @@
     fitAddon.fit();
     sendResize();
   }).observe(container);
+
+  // Mobile keyboard helper row.
+  var kbdHelper = document.getElementById("kbd-helper");
+  if (kbdHelper) {
+    // Show on touch devices.
+    if ("ontouchstart" in window || navigator.maxTouchPoints > 0) {
+      kbdHelper.classList.remove("hidden");
+      kbdHelper.classList.add("flex");
+    }
+
+    kbdHelper.addEventListener("click", function (e) {
+      var btn = e.target.closest("button");
+      if (!btn) return;
+
+      var key = btn.getAttribute("data-key");
+      var ctrl = btn.getAttribute("data-ctrl");
+      var esc = btn.getAttribute("data-esc");
+
+      if (key) {
+        term.focus();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(new TextEncoder().encode(key));
+        }
+      } else if (ctrl) {
+        // Ctrl+<char> = char code - 96
+        var code = ctrl.charCodeAt(0) - 96;
+        term.focus();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(new Uint8Array([code]));
+        }
+      } else if (esc) {
+        term.focus();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(new TextEncoder().encode(esc));
+        }
+      }
+    });
+  }
 
   connect();
 })();

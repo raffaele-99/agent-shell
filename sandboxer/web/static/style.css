@@ -1,16 +1,43 @@
-/* Minimal overrides for sandboxer web UI. */
+/* Sandboxer Web UI — custom utilities */
 
-nav a {
-  text-decoration: none;
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+/* xterm container sizing */
+.xterm-container {
+  width: 100%;
+  height: 100%;
+  touch-action: manipulation;
 }
 
-table code {
-  font-size: 0.85em;
+/* Toast animations */
+#toast-container > div {
+  transform: translateX(0);
+  transition: opacity 0.3s ease, transform 0.3s ease;
 }
 
-/* Compact action buttons in table rows. */
-td button, td a[role="button"] {
-  display: inline-block;
-  margin-right: 0.25rem;
-  margin-bottom: 0;
+/* HTMX loading indicator */
+.htmx-indicator {
+  display: none;
+}
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  display: inline-flex;
+}
+
+/* Spinner animation */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Keyboard helper row */
+.kbd-helper button {
+  min-width: 44px;
+  min-height: 44px;
 }
