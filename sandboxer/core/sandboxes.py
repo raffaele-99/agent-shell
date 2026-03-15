@@ -112,6 +112,8 @@ def list_running_sandboxes() -> list[SandboxInfo]:
                 SandboxInfo(
                     name=row.name,
                     status=row.status,
+                    agent=row.agent,
+                    workspace=row.workspace,
                 )
             )
     return results

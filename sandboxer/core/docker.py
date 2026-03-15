@@ -14,6 +14,8 @@ class SandboxRow:
     name: str
     status: str
     image: str
+    agent: str = ""
+    workspace: str = ""
 
 
 class DockerSandboxError(Exception):
@@ -144,6 +146,11 @@ def list_sandboxes() -> list[SandboxRow]:
     name_idx = _col_index("SANDBOX") or _col_index("NAME") or 0
     status_idx = _col_index("STATUS")
     image_idx = _col_index("IMAGE")
+    agent_idx = _col_index("AGENT")
+    workspace_idx = _col_index("WORKSPACE")
+
+    def _get(parts: list[str], idx: int | None) -> str:
+        return parts[idx] if idx is not None and idx < len(parts) else ""
 
     for line in lines[1:]:
         if not line.strip():
@@ -152,13 +159,14 @@ def list_sandboxes() -> list[SandboxRow]:
         for i, start in enumerate(col_starts):
             end = col_starts[i + 1] if i + 1 < len(col_starts) else len(line)
             parts.append(line[start:end].strip())
-        # Normalise to 3 fields minimum.
         while len(parts) < len(col_names):
             parts.append("")
         rows.append(SandboxRow(
-            name=parts[name_idx] if name_idx is not None else parts[0],
-            status=parts[status_idx] if status_idx is not None else "",
-            image=parts[image_idx] if image_idx is not None else "",
+            name=_get(parts, name_idx) or parts[0],
+            status=_get(parts, status_idx),
+            image=_get(parts, image_idx),
+            agent=_get(parts, agent_idx),
+            workspace=_get(parts, workspace_idx),
         ))
 
     return rows
